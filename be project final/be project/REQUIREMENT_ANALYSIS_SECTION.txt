@@ -1,0 +1,135 @@
+2. REQUIREMENT ANALYSIS
+
+Requirement analysis is the process of defining the needs and constraints of a system. This section provides a comprehensive analysis of functional requirements, non-functional requirements, and system constraints for Equisense.
+
+2.1 Functional Requirements
+
+Functional requirements define what the system must do. The following functional requirements have been identified:
+
+FR1. Stock Search and Discovery:
+• Users shall be able to search stocks by symbol or company name
+• System shall provide auto-completion suggestions
+• System shall support US (NYSE/NASDAQ) and Indian (NSE) markets
+• System shall display search results with symbols and prices
+
+FR2. Real-Time Data Access:
+• System shall fetch real-time stock prices from market data providers
+• System shall update prices automatically at regular intervals
+• System shall handle data fetching errors with fallback mechanisms
+• System shall support historical data retrieval (OHLC format)
+
+FR3. AI-Powered Predictions:
+• System shall predict stock movements (Up/Down/Neutral) using LSTM models
+• System shall provide confidence scores (0-100%) for predictions
+• System shall calculate expected returns based on predictions
+• System shall support model training for improved accuracy
+
+FR4. Trading Recommendations:
+• System shall generate trading calls (BUY/SELL/HOLD)
+• System shall calculate entry price, stop-loss, and target price
+• System shall provide risk/reward ratios
+• System shall display estimated timeframes and rationale
+
+FR5. Company Information:
+• System shall display company name, symbol, sector, industry
+• System shall show market capitalization and P/E ratio
+• System shall provide company description and website
+• System shall display company logos with fallback mechanisms
+
+FR6. Risk Assessment:
+• System shall calculate volatility and risk scores (0-10 scale)
+• System shall assess risk levels (Low/Medium/High)
+• System shall generate risk alerts for high-risk positions
+• System shall monitor position sizes relative to portfolio
+
+FR7. Portfolio Management:
+• System shall calculate portfolio value and expected returns
+• System shall track profit/loss percentages
+• System shall compute Sharpe ratio and performance metrics
+• System shall display portfolio summary with visual indicators
+
+FR8. Technical Analysis:
+• System shall calculate technical indicators (RSI, MACD, Bollinger Bands)
+• System shall provide moving averages (SMA, EMA)
+• System shall use indicators for prediction and analysis
+
+FR9. Historical Analysis:
+• System shall fetch and display historical price data
+• System shall calculate prediction accuracy metrics
+• System shall provide backtesting capabilities
+• System shall display price charts (line and candlestick)
+
+FR10. Multi-Agent System:
+• System shall implement four specialized agents:
+  - Analyst Agent for trend prediction
+  - Trader Agent for decision-making
+  - Risk Agent for risk management
+  - Auditor Agent for performance evaluation
+• System shall ensure agents communicate through orchestration layer
+• System shall maintain consistent logic across all agents
+
+2.2 Non-Functional Requirements
+
+Non-functional requirements define how well the system performs:
+
+NFR1. Performance:
+• API response time shall be less than 2 seconds (average)
+• Stock data fetching shall complete within 3 seconds
+• Prediction generation shall complete within 5 seconds
+• Frontend shall load within 3 seconds on standard broadband
+
+NFR2. Reliability:
+• System shall maintain 99% uptime during business hours
+• System shall handle errors gracefully without crashing
+• System shall provide fallback mechanisms for data failures
+• System shall recover automatically from temporary failures
+
+NFR3. Usability:
+• User interface shall be intuitive and easy to navigate
+• System shall provide clear error messages
+• System shall display loading indicators during operations
+• System shall support responsive design for different screen sizes
+
+NFR4. Security:
+• System shall validate all user inputs to prevent attacks
+• System shall implement CORS appropriately
+• System shall not store sensitive financial information
+• System shall use HTTPS for data transmission in production
+
+NFR5. Scalability:
+• Architecture shall support horizontal scaling
+• System shall handle increasing number of stocks without degradation
+• System shall support addition of new agents without major refactoring
+• System shall be deployable on cloud platforms
+
+NFR6. Compatibility:
+• System shall work on Windows, Linux, and macOS
+• System shall support modern web browsers (Chrome, Firefox, Edge, Safari)
+• System shall be compatible with Python 3.9+ and Node.js 18.0+
+• System shall support responsive design for mobile devices
+
+2.3 System Constraints
+
+Technical Constraints:
+• Dependent on external market data APIs (yfinance)
+• Limited by market data availability and accuracy
+• Model training requires significant computational resources
+• Real-time updates depend on internet connection stability
+
+Economic Constraints:
+• Free tier limitations of data providers
+• Development and deployment costs
+• Maintenance and update costs
+
+Regulatory Constraints:
+• Must comply with financial data usage policies
+• Cannot provide actual trading execution (advisory only)
+• Must include disclaimers about investment risks
+
+Time Constraints:
+• Development timeline limitations
+• Model training time requirements
+• Data fetching latency from external sources
+
+
+
