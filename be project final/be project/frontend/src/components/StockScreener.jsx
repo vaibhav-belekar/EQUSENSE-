@@ -38,6 +38,36 @@ import AIPrediction from './AIPrediction'
 import TradingCall from './TradingCall'
 import StockComparison from './StockComparison'
 
+const buildDecisionFromModel = (signal, expectedReturn, risk, confidence = 0.5, score = null) => {
+  const normalizedSignal = String(signal || 'Neutral').trim()
+  const computedScore = Number(score ?? (expectedReturn / Math.max(risk, 0.5)))
+
+  if (normalizedSignal === 'Up' && expectedReturn >= 0.6 && confidence >= 0.42 && risk <= 8.5) {
+    return {
+      recommendation: 'BUY',
+      color: 'green',
+      action: 'Buy',
+      reason: `ML trend model is bullish with ${Math.round(confidence * 100)}% confidence and ${expectedReturn.toFixed(2)}% expected return.`
+    }
+  }
+
+  if (normalizedSignal === 'Down' && expectedReturn <= -0.4) {
+    return {
+      recommendation: 'AVOID',
+      color: 'red',
+      action: 'Avoid',
+      reason: `ML trend model is bearish with ${Math.round(confidence * 100)}% confidence and ${expectedReturn.toFixed(2)}% expected return.`
+    }
+  }
+
+  return {
+    recommendation: 'HOLD',
+    color: 'yellow',
+    action: 'Hold',
+    reason: `ML trend model is neutral or not strong enough yet: score ${computedScore.toFixed(2)}, expected return ${expectedReturn.toFixed(2)}%, risk ${risk.toFixed(1)}/10.`
+  }
+}
+
 const StockScreener = () => {
   const [searchTerm, setSearchTerm] = useState('')
   const [searchResults, setSearchResults] = useState([])
@@ -221,6 +251,7 @@ const StockScreener = () => {
     const score = recommendation?.score ?? (expectedReturn / Math.max(riskScore, 0.5))
     const signal = selectedStockData?.prediction?.signal || recommendation?.signal || 'Neutral'
     const confidence = selectedStockData?.prediction?.confidence ?? ((recommendation?.confidence ?? 50) / 100)
+    const decision = buildDecisionFromModel(signal, expectedReturn, riskScore, confidence, score)
 
     const investmentAmountValue = parseFloat(investmentAmount)
     const investmentPeriodValue = Math.max(1, parseInt(investmentPeriod))
@@ -232,11 +263,11 @@ const StockScreener = () => {
     const profitLoss = predictedValue - investmentAmountValue
     const profitLossPercent = investmentAmountValue > 0 ? (profitLoss / investmentAmountValue) * 100 : 0
 
-    const auditorRecommendation = expectedReturn >= 5 && riskScore <= 7 && score >= 0.8
-      ? `BUY: Strong expected return (${expectedReturn.toFixed(2)}%) with manageable risk.`
-      : expectedReturn < 0
-        ? `AVOID: Negative expected return (${expectedReturn.toFixed(2)}%) suggests downside risk.`
-        : `HOLD: Positive but moderate expected return (${expectedReturn.toFixed(2)}%).`
+    const auditorRecommendation = decision.recommendation === 'BUY'
+      ? `BUY: ML trend model supports an upward move with expected return ${expectedReturn.toFixed(2)}%.`
+      : decision.recommendation === 'AVOID'
+        ? `AVOID: ML trend model indicates downside risk with expected return ${expectedReturn.toFixed(2)}%.`
+        : `HOLD: ML trend model is neutral or not strong enough for a buy yet.`
 
     return {
       success: true,
@@ -262,6 +293,9 @@ const StockScreener = () => {
         expected_return: scaledReturn * 100,
         risk: riskScore,
         score,
+        recommendation: decision.recommendation,
+        recommendation_reason: decision.reason,
+        model_action: decision.action,
         agent_reports: {
           analyst: {
             signal,
@@ -272,9 +306,9 @@ const StockScreener = () => {
             reasoning: 'Built from the latest fetched price history and prediction when backend live analysis was unavailable.'
           },
           trader: {
-            action: expectedReturn >= 5 && riskScore <= 7 && score >= 0.8 ? 'Buy' : expectedReturn < 0 ? 'Avoid' : 'Hold',
-            recommended_shares: expectedReturn >= 5 && riskScore <= 7 && score >= 0.8 ? Math.floor(shares) : 0,
-            reasoning: 'Trading call derived from the current searched stock metrics and risk-adjusted expected return.'
+            action: decision.action,
+            recommended_shares: decision.action === 'Buy' ? Math.floor(shares) : 0,
+            reasoning: decision.reason
           },
           risk: {
             risk_level: riskScore <= 3 ? 'Low' : riskScore <= 6 ? 'Medium' : 'High',
@@ -318,60 +352,57 @@ const StockScreener = () => {
     setSearching(true)
     try {
       // Fetch real-time price
+      const [priceResult, ohlcResult, recommendationResult] = await Promise.allSettled([
+        getRealtimePrice(symbol, market),
+        getOHLCData(symbol, '1mo', '1d', market),
+        getRecommendation(symbol, market),
+      ])
+
       let price = null
-      try {
-        const priceData = await getRealtimePrice(symbol, market)
-        if (priceData.success) {
-          price = priceData.price || priceData.current_price
-        }
-      } catch (error) {
-        console.error('Error fetching price:', error)
+      if (priceResult.status === 'fulfilled' && priceResult.value?.success) {
+        price = priceResult.value.price || priceResult.value.current_price
+      } else if (priceResult.status === 'rejected') {
+        console.error('Error fetching price:', priceResult.reason)
       }
 
       // Fetch predictions for the symbol - always create prediction from price data
       let prediction = null
-      let ohlcDataForPrediction = null
+      let ohlcDataForPrediction = ohlcResult.status === 'fulfilled' ? ohlcResult.value : null
       
       try {
-        // First, try to get price data for trend analysis (this is most reliable)
-        try {
-          ohlcDataForPrediction = await getOHLCData(symbol, '1mo', '1d', market)
-          if (ohlcDataForPrediction && ohlcDataForPrediction.success && ohlcDataForPrediction.data && ohlcDataForPrediction.data.length >= 2) {
-            const prices = ohlcDataForPrediction.data.map(d => d.close).filter(p => p > 0)
-            if (prices.length >= 2) {
-              const recentPrice = prices[prices.length - 1]
-              const previousPrice = prices[prices.length - 2]
-              const change = (recentPrice - previousPrice) / previousPrice
-              
-              // Update price if not set
-              if (!price) {
-                price = recentPrice
-              }
-              
-              // Calculate prediction from price trend
-              if (change > 0.02) {
-                prediction = { signal: 'Up', confidence: Math.min(0.85, 0.6 + Math.abs(change) * 8) }
-              } else if (change < -0.02) {
-                prediction = { signal: 'Down', confidence: Math.min(0.85, 0.6 + Math.abs(change) * 8) }
-              } else {
-                prediction = { signal: 'Neutral', confidence: 0.55 }
-              }
-            } else if (prices.length === 1 && !price) {
-              price = prices[0]
-              prediction = { signal: 'Neutral', confidence: 0.5 }
+        if (ohlcDataForPrediction && ohlcDataForPrediction.success && ohlcDataForPrediction.data && ohlcDataForPrediction.data.length >= 2) {
+          const prices = ohlcDataForPrediction.data.map(d => d.close).filter(p => p > 0)
+          if (prices.length >= 2) {
+            const recentPrice = prices[prices.length - 1]
+            const previousPrice = prices[prices.length - 2]
+            const change = (recentPrice - previousPrice) / previousPrice
+            
+            if (!price) {
+              price = recentPrice
             }
+            
+            if (change > 0.02) {
+              prediction = { signal: 'Up', confidence: Math.min(0.85, 0.6 + Math.abs(change) * 8) }
+            } else if (change < -0.02) {
+              prediction = { signal: 'Down', confidence: Math.min(0.85, 0.6 + Math.abs(change) * 8) }
+            } else {
+              prediction = { signal: 'Neutral', confidence: 0.55 }
+            }
+          } else if (prices.length === 1 && !price) {
+            price = prices[0]
+            prediction = { signal: 'Neutral', confidence: 0.5 }
           }
-        } catch (priceError) {
-          console.log('[StockScreener] Could not fetch price data for prediction:', priceError)
+        } else if (ohlcResult.status === 'rejected') {
+          console.log('[StockScreener] Could not fetch price data for prediction:', ohlcResult.reason)
         }
         
-        try {
-          const recommendationPayload = await getRecommendation(symbol, market)
+        if (recommendationResult.status === 'fulfilled') {
+          const recommendationPayload = recommendationResult.value
           if (recommendationPayload && recommendationPayload.success) {
             prediction = buildPredictionFromSignal(recommendationPayload)
             setRecommendation(recommendationPayload)
           }
-        } catch (predError) {
+        } else {
           console.log('[StockScreener] Recommendation API failed, keeping fallback prediction')
         }
       } catch (error) {
@@ -426,12 +457,11 @@ const StockScreener = () => {
       }
 
       // Fetch recommendation from backend (uses unified recommendation engine)
-      let recommendationData = recommendation
+      let recommendationData = recommendationResult.status === 'fulfilled' ? recommendationResult.value : recommendation
       let calculatedExpectedReturn = prediction.expected_return ?? 0
       let calculatedRisk = prediction.risk ?? 5.0
       
       try {
-        recommendationData = await getRecommendation(symbol, market)
         if (recommendationData && recommendationData.success) {
           if (activeSearchRequestRef.current === requestId) {
             setRecommendation(recommendationData)
@@ -658,12 +688,20 @@ const StockScreener = () => {
             setSearchResults(prev => prev.map(item => item.symbol === symbol ? refreshedStock : item))
           }
 
+          const decision = buildDecisionFromModel(
+            report.prediction?.signal || 'Neutral',
+            expectedReturn,
+            riskScore,
+            report.prediction?.confidence || 0.5,
+            report.score ?? sharpeRatio
+          )
+
           setRecommendation({
             success: true,
             symbol,
-            recommendation: expectedReturn > 0 ? 'BUY' : expectedReturn < 0 ? 'AVOID' : 'HOLD',
-            reason: report.agent_reports?.auditor?.reasoning || 'Updated from investment analysis.',
-            color: expectedReturn > 0 && riskScore <= 8 && (report.score ?? sharpeRatio) > 0 ? 'green' : expectedReturn < 0 ? 'red' : 'yellow',
+            recommendation: report.recommendation || decision.recommendation,
+            reason: report.recommendation_reason || report.agent_reports?.trader?.reasoning || decision.reason,
+            color: decision.color,
             score: report.score ?? sharpeRatio,
             expected_return: expectedReturn,
             risk: riskScore,
@@ -1038,6 +1076,7 @@ const StockScreener = () => {
                 priceData={priceHistory}
                 symbol={selectedStockData.symbol}
                 currentPrice={selectedStockData.price || stockPrices[selectedStockData.symbol]}
+                market={market}
               />
 
               {/* News Sentiment */}

@@ -178,6 +178,15 @@ def calculate_expected_return(signal: str, confidence: float) -> float:
     return expected_return
 
 
+def dampen_sentiment_impact(score: float, signal: str) -> float:
+    """
+    Keep news sentiment useful without letting a mildly negative headline
+    flip most neutral setups into an AVOID call.
+    """
+    multiplier = 0.35 if signal == 'Neutral' else 0.5
+    return float(np.clip(score * multiplier, -0.6, 0.6))
+
+
 def calculate_recommendation_score(expected_return: float, risk: float) -> float:
     """
     Score = expected return divided by risk.
@@ -192,14 +201,14 @@ def get_recommendation_from_score(score: float, confidence: float, expected_retu
     """
     risk_level = get_risk_level_from_score(risk)
 
-    if expected_return > 0 and risk <= RISK_SCORE_BUY and score > 0:
+    if expected_return >= 1.0 and risk <= RISK_SCORE_BUY and score > 0:
         recommendation = "BUY"
         color = "green"
         reason = (
             f"Profit outlook is positive ({expected_return:.2f}%) with acceptable risk "
             f"({risk:.2f}/10) and a supportive return/risk score ({score:.2f})."
         )
-    elif expected_return < 0:
+    elif expected_return <= -1.0:
         recommendation = "AVOID"
         color = "red"
         reason = (
@@ -222,6 +231,53 @@ def get_recommendation_from_score(score: float, confidence: float, expected_retu
         "expected_return": round(float(expected_return), 2),
         "risk": round(float(risk), 1),
         "confidence": round(float(confidence * 100), 1)
+    }
+
+
+def get_model_aligned_recommendation(
+    signal: str,
+    confidence: float,
+    expected_return: float,
+    risk: float,
+    score: Optional[float] = None,
+) -> Dict:
+    """
+    Keep the final recommendation aligned with the analyst model's trend signal.
+    """
+    normalized_signal = (signal or "Neutral").strip().title()
+    computed_score = float(score if score is not None else calculate_recommendation_score(expected_return, risk))
+
+    if normalized_signal == "Up" and expected_return >= 0.6 and confidence >= 0.42 and risk <= 8.5:
+        recommendation = "BUY"
+        color = "green"
+        reason = (
+            f"ML trend model is bullish ({normalized_signal}) with {confidence*100:.1f}% confidence. "
+            f"Modeled return is {expected_return:.2f}% with risk {risk:.2f}/10, so the setup supports a buy."
+        )
+    elif normalized_signal == "Down" and expected_return <= -0.4:
+        recommendation = "AVOID"
+        color = "red"
+        reason = (
+            f"ML trend model is bearish ({normalized_signal}) with {confidence*100:.1f}% confidence. "
+            f"Modeled return is {expected_return:.2f}%, so fresh entries should be avoided and existing positions reviewed."
+        )
+    else:
+        recommendation = "HOLD"
+        color = "yellow"
+        reason = (
+            f"ML trend model is {normalized_signal.lower()} with {confidence*100:.1f}% confidence. "
+            f"Current return/risk profile ({expected_return:.2f}% / {risk:.2f}) is not strong enough for a decisive buy."
+        )
+
+    return {
+        "recommendation": recommendation,
+        "color": color,
+        "reason": reason,
+        "score": round(float(computed_score), 2),
+        "expected_return": round(float(expected_return), 2),
+        "risk": round(float(risk), 1),
+        "confidence": round(float(confidence * 100), 1),
+        "signal": normalized_signal,
     }
 
 
@@ -287,7 +343,7 @@ def generate_unified_recommendation(
         if base_expected_return is not None
         else calculate_expected_return(signal, confidence)
     )
-    sentiment_impact = sentiment_score * 1.0
+    sentiment_impact = dampen_sentiment_impact(sentiment_score, signal)
     expected_return = float(np.clip(base_return + sentiment_impact, -12.0, 12.0))
 
     # Calculate risk score

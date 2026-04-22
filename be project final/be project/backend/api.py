@@ -53,6 +53,7 @@ from backend.recommendation_engine import (
     calculate_expected_return,
     calculate_recommendation_score,
     get_recommendation_from_score,
+    get_model_aligned_recommendation,
     get_auditor_recommendation,
     get_trader_action,
     generate_unified_recommendation
@@ -579,10 +580,22 @@ async def get_realtime_price(symbol: str, market: str = "US"):
             try:
                 import yfinance as yf
                 ticker = yf.Ticker(fetch_symbol)
+                fast_info = getattr(ticker, 'fast_info', None)
+                if fast_info:
+                    fast_price = (
+                        fast_info.get('lastPrice') or
+                        fast_info.get('regularMarketPrice') or
+                        fast_info.get('previousClose')
+                    )
+                    if fast_price:
+                        price = float(fast_price)
+
                 info = ticker.info
                 
                 # Try to get current price
-                if info and 'currentPrice' in info and info['currentPrice']:
+                if price:
+                    pass
+                elif info and 'currentPrice' in info and info['currentPrice']:
                     price = float(info['currentPrice'])
                 elif info and 'regularMarketPrice' in info and info['regularMarketPrice']:
                     price = float(info['regularMarketPrice'])
@@ -1275,11 +1288,18 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
         
         # Trader Agent Report - Use unified recommendation engine (same logic as Trader Agent)
         # Get trader action using unified engine (matches Trader Agent logic)
+        model_decision = get_model_aligned_recommendation(
+            signal=signal,
+            confidence=confidence,
+            expected_return=scaled_expected_return_pct,
+            risk=modeled_risk,
+            score=score,
+        )
         trader_action = (
             "Buy"
-            if scaled_expected_return_pct > 0 and modeled_risk <= RISK_SCORE_BUY and score > 0
+            if model_decision["recommendation"] == "BUY"
             else "Avoid"
-            if scaled_expected_return_pct < 0
+            if model_decision["recommendation"] == "AVOID"
             else "Hold"
         )
         recommended_action = trader_action
@@ -1294,6 +1314,10 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
         agent_reports['trader']["reasoning"] = (
             f"Trader Agent recommends {recommended_action} from expected return {scaled_expected_return_pct:.2f}%, "
             f"risk {modeled_risk:.2f}, and score {score:.2f}. "
+            f"For investment amount {investment_amount:,.2f}, you could purchase approximately {int(shares)} shares at price {current_price:.2f}."
+        )
+        agent_reports['trader']["reasoning"] = (
+            f"{model_decision['reason']} "
             f"For investment amount {investment_amount:,.2f}, you could purchase approximately {int(shares)} shares at price {current_price:.2f}."
         )
 
@@ -1373,6 +1397,9 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
                 "expected_return": scaled_expected_return_pct,
                 "risk": modeled_risk,
                 "score": score,
+                "recommendation": model_decision["recommendation"],
+                "recommendation_reason": model_decision["reason"],
+                "model_action": recommended_action,
                 "calibration": {
                     "confidence_damping": round(float(confidence_damping), 3),
                     "move_cap_pct": round(float(move_cap_pct), 2),
@@ -1521,7 +1548,13 @@ async def get_recommendation(symbol: str, market: str = "US"):
         expected_return = recommendation_summary.get('expected_return', base_expected_return)
         modeled_risk = recommendation_summary.get('risk', prediction.get('risk') if prediction else calculate_risk_score(volatility))
         score = recommendation_summary.get('score', calculate_recommendation_score(expected_return, max(modeled_risk, 0.5)))
-        recommendation_data = get_recommendation_from_score(score, confidence, expected_return, modeled_risk)
+        recommendation_data = get_model_aligned_recommendation(
+            signal=signal,
+            confidence=confidence,
+            expected_return=expected_return,
+            risk=modeled_risk,
+            score=score,
+        )
         if recommendation_summary.get('sentiment_impact'):
             recommendation_data['reason'] = (
                 f"{recommendation_data['reason']} "

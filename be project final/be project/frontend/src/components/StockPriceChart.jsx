@@ -10,9 +10,9 @@ import {
   ResponsiveContainer
 } from 'recharts'
 
-const StockPriceChart = ({ priceData, symbol, currentPrice }) => {
-  const isIndianSymbol = /\.NS$|\.BO$/i.test(symbol || '')
-  const currencySymbol = isIndianSymbol ? 'Rs' : '$'
+const StockPriceChart = ({ priceData, symbol, currentPrice, market = 'US' }) => {
+  const isIndianSymbol = market === 'IN' || /\.NS$|\.BO$/i.test(symbol || '')
+  const currencySymbol = isIndianSymbol ? '₹' : '$'
   const chartData = priceData?.map(item => ({
     date: item.date || item.time,
     price: item.price || item.close || item.value,

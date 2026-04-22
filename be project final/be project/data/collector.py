@@ -133,6 +133,18 @@ class DataCollector:
             for fetch_symbol in candidates:
                 try:
                     ticker = yf.Ticker(fetch_symbol)
+                    fast_info = getattr(ticker, 'fast_info', None)
+                    if fast_info:
+                        fast_price = (
+                            fast_info.get('lastPrice') or
+                            fast_info.get('regularMarketPrice') or
+                            fast_info.get('previousClose')
+                        )
+                        if fast_price:
+                            price = float(fast_price)
+                            print(f"[DataCollector] Got price from fast_info for {fetch_symbol}: {price}")
+                            return price
+
                     info = ticker.info
 
                     if info and len(info) > 0:

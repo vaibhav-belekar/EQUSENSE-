@@ -12,16 +12,16 @@ const buildRecommendationFromMetrics = (metrics, pred, sym) => {
 
   let recommendation = 'HOLD'
   let color = 'yellow'
-  let reason = `Return/risk profile is mixed: expected return ${expectedReturn.toFixed(2)}%, risk ${risk.toFixed(1)}/10, score ${score.toFixed(2)}.`
+  let reason = `ML trend model is neutral or not strong enough yet: expected return ${expectedReturn.toFixed(2)}%, risk ${risk.toFixed(1)}/10, score ${score.toFixed(2)}.`
 
-  if (expectedReturn > 0 && risk <= 8 && score > 0) {
+  if (signal === 'Up' && expectedReturn >= 0.6 && confidence >= 0.42 && risk <= 8.5) {
     recommendation = 'BUY'
     color = 'green'
-    reason = `Profit outlook is positive (${expectedReturn.toFixed(2)}%) with acceptable risk (${risk.toFixed(1)}/10) and a supportive return/risk score (${score.toFixed(2)}).`
-  } else if (expectedReturn < 0) {
+    reason = `ML trend model is bullish with ${(confidence * 100).toFixed(1)}% confidence and ${expectedReturn.toFixed(2)}% expected return.`
+  } else if (signal === 'Down' && expectedReturn <= -0.4) {
     recommendation = 'AVOID'
     color = 'red'
-    reason = `Modeled return is negative (${expectedReturn.toFixed(2)}%) after accounting for risk (${risk.toFixed(1)}/10), so downside outweighs reward.`
+    reason = `ML trend model is bearish with ${(confidence * 100).toFixed(1)}% confidence and ${expectedReturn.toFixed(2)}% expected return.`
   }
 
   return {

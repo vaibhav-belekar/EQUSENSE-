@@ -32,6 +32,16 @@ const normalizeRecommendationLabel = (value) => {
   return ''
 }
 
+const getModelFallbackRecommendation = (signal, expectedReturn, risk, confidence, score) => {
+  if (signal === 'Up' && expectedReturn >= 0.6 && confidence >= 0.42 && risk <= 8.5 && score > 0) {
+    return 'BUY'
+  }
+  if (signal === 'Down' && expectedReturn <= -0.4) {
+    return 'AVOID'
+  }
+  return 'HOLD'
+}
+
 const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPeriod, market, recommendation, onClose }) => {
   if (!analysis || !analysis.success) return null
 
@@ -39,7 +49,7 @@ const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPer
   const prediction = report.prediction || {}
   const agentReports = report.agent_reports || {}
   const effectiveMarket = report.market || market || (/\.NS$|\.BO$/i.test(symbol || '') ? 'IN' : 'US')
-  const currencySymbol = effectiveMarket === 'IN' ? 'Rs' : '$'
+  const currencySymbol = effectiveMarket === 'IN' ? '₹' : '$'
   const currency = (value) => `${currencySymbol} ${Number(value || 0).toFixed(2)}`
 
   const expectedReturn = Number(report.expected_return ?? prediction.expected_return ?? agentReports.analyst?.expected_return ?? 0.2)
@@ -64,12 +74,12 @@ const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPer
     agentReports.trader?.action
   )
 
-  const recommendationFromReport = reportRecommendation || (
-    expectedReturn > 0 && modeledRisk <= 8 && score > 0
-      ? 'BUY'
-      : expectedReturn < 0
-        ? 'AVOID'
-        : 'HOLD'
+  const recommendationFromReport = reportRecommendation || getModelFallbackRecommendation(
+    prediction.signal || 'Neutral',
+    expectedReturn,
+    modeledRisk,
+    Number(prediction.confidence ?? 0.5),
+    score
   )
 
   const recommendationColor =
