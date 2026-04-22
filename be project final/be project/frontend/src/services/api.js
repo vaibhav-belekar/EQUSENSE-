@@ -68,15 +68,44 @@ export const initializeEcosystem = async (symbols = ['AAPL', 'TSLA', 'MSFT', 'GO
 
 // Get status with better error handling
 export const getStatus = async () => {
+  const maxAttempts = 2
+  let lastError
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      console.log(`[API] Checking backend status... (attempt ${attempt}/${maxAttempts})`)
+      const response = await api.get('/api/status', { timeout: 60000 })
+      console.log('[API] Status response:', response.data)
+      return response.data
+    } catch (error) {
+      lastError = error
+      console.error('[API] Error checking status:', error)
+
+      const isNetworkError =
+        error.code === 'ECONNREFUSED' ||
+        error.code === 'ECONNABORTED' ||
+        error.message.includes('Network Error') ||
+        error.message.includes('Failed to fetch') ||
+        error.message.includes('timeout')
+
+      if (attempt < maxAttempts && isNetworkError) {
+        await new Promise(resolve => setTimeout(resolve, 3000))
+        continue
+      }
+    }
+  }
+
   try {
-    console.log('[API] Checking backend status...')
-    const response = await api.get('/api/status', { timeout: 5000 })
-    console.log('[API] Status response:', response.data)
-    return response.data
+    throw lastError
   } catch (error) {
-    console.error('[API] Error checking status:', error)
     // Throw error with clear message if backend is not reachable
-    if (error.code === 'ECONNREFUSED' || error.message.includes('Network Error') || error.message.includes('Failed to fetch')) {
+    if (
+      error.code === 'ECONNREFUSED' ||
+      error.code === 'ECONNABORTED' ||
+      error.message.includes('Network Error') ||
+      error.message.includes('Failed to fetch') ||
+      error.message.includes('timeout')
+    ) {
       const errorMsg = `Cannot connect to backend server at ${BACKEND_DISPLAY_URL}`
       console.error('[API]', errorMsg)
       throw new Error('Network Error: ' + errorMsg)
