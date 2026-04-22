@@ -68,19 +68,11 @@ app = FastAPI(
 )
 
 # Enable CORS for frontend
-frontend_url = os.getenv("FRONTEND_URL", "").strip()
-allowed_origins = [
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-]
-if frontend_url:
-    allowed_origins.append(frontend_url)
-
+# This app does not use cookie-based auth, so permissive CORS is acceptable
+# and avoids Vercel/preview origin mismatches during deployment.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origins=["*"],
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
