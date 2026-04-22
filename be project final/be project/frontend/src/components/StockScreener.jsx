@@ -22,7 +22,8 @@ import {
   getCompanyInfo,
   getOHLCData,
   getRecommendation,
-  addWatchlistItem
+  addWatchlistItem,
+  BACKEND_DISPLAY_URL
 } from '../services/api'
 import StockAnalysisReport from './StockAnalysisReport'
 import HistoricalAnalysis from './HistoricalAnalysis'
@@ -530,7 +531,7 @@ const StockScreener = () => {
         console.error('Could not check status:', statusError)
         const errorMsg = statusError.message || 'Unknown error'
         if (errorMsg.includes('Network Error') || errorMsg.includes('ECONNREFUSED') || errorMsg.includes('Failed to fetch')) {
-          toast.error('Cannot connect to backend server. Please ensure the backend is running on http://localhost:8000')
+          toast.error(`Cannot connect to backend server at ${BACKEND_DISPLAY_URL}`)
         } else {
           toast.error(`Cannot connect to backend: ${errorMsg}`)
         }
@@ -579,7 +580,7 @@ const StockScreener = () => {
         const errorMsg = initError.response?.data?.detail || initError.message || 'Unknown error'
         
         if (errorMsg.includes('Network Error') || errorMsg.includes('ECONNREFUSED') || errorMsg.includes('Failed to fetch')) {
-          toast.error('Cannot connect to backend server. Please ensure the backend is running on http://localhost:8000')
+          toast.error(`Cannot connect to backend server at ${BACKEND_DISPLAY_URL}`)
         } else if (errorMsg.includes('timeout')) {
           toast.error('Initialization timed out. The backend may be slow. Please try again.')
         } else {
@@ -592,7 +593,7 @@ const StockScreener = () => {
       console.error('Unexpected error in ensureEcosystemInitialized:', error)
       const errorMsg = error.message || 'Unknown error'
       if (errorMsg.includes('Network Error') || errorMsg.includes('ECONNREFUSED') || errorMsg.includes('Failed to fetch')) {
-        toast.error('Cannot connect to backend server. Please ensure the backend is running on http://localhost:8000')
+        toast.error(`Cannot connect to backend server at ${BACKEND_DISPLAY_URL}`)
       } else {
         toast.error(`Error: ${errorMsg}. Please check backend logs.`)
       }
@@ -870,10 +871,10 @@ const StockScreener = () => {
           <p className="text-gray-600">Search stocks, analyze investments, and predict prices</p>
           {!backendStatus.connected && !backendStatus.checking && (
             <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-              <p className="text-yellow-800 font-semibold mb-1">⚠️ Backend Server Not Running</p>
+              <p className="text-yellow-800 font-semibold mb-1">⚠️ Backend Server Not Reachable</p>
               <p className="text-yellow-700 text-sm">
-                Please start the backend server on <code className="bg-yellow-100 px-1 rounded">http://localhost:8000</code>.
-                Run: <code className="bg-yellow-100 px-1 rounded">cd backend && python api.py</code>
+                The frontend could not reach <code className="bg-yellow-100 px-1 rounded">{BACKEND_DISPLAY_URL}</code>.
+                If this is a deployed app, wait a few seconds for the backend to wake up and refresh once.
               </p>
             </div>
           )}

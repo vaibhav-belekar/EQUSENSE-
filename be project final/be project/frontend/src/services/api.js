@@ -1,6 +1,17 @@
 import axios from 'axios'
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const DEFAULT_LOCAL_API_URL = 'http://localhost:8000'
+const API_BASE_URL = import.meta.env.VITE_API_URL || DEFAULT_LOCAL_API_URL
+const BACKEND_DISPLAY_URL = API_BASE_URL
+const getRealtimeWebSocketUrl = () => {
+  try {
+    const normalized = new URL(API_BASE_URL)
+    const protocol = normalized.protocol === 'https:' ? 'wss:' : 'ws:'
+    return `${protocol}//${normalized.host}/ws/realtime-prices`
+  } catch {
+    return 'ws://localhost:8000/ws/realtime-prices'
+  }
+}
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -49,7 +60,7 @@ export const initializeEcosystem = async (symbols = ['AAPL', 'TSLA', 'MSFT', 'GO
   } catch (error) {
     console.error('[API] Error initializing ecosystem:', error)
     if (error.code === 'ECONNREFUSED' || error.message.includes('Network Error') || error.message.includes('Failed to fetch')) {
-      throw new Error('Network Error: Cannot connect to backend server. Please ensure the backend is running on http://localhost:8000')
+      throw new Error(`Network Error: Cannot connect to backend server at ${BACKEND_DISPLAY_URL}`)
     }
     throw error
   }
@@ -66,7 +77,7 @@ export const getStatus = async () => {
     console.error('[API] Error checking status:', error)
     // Throw error with clear message if backend is not reachable
     if (error.code === 'ECONNREFUSED' || error.message.includes('Network Error') || error.message.includes('Failed to fetch')) {
-      const errorMsg = 'Cannot connect to backend server. Please ensure the backend is running on http://localhost:8000'
+      const errorMsg = `Cannot connect to backend server at ${BACKEND_DISPLAY_URL}`
       console.error('[API]', errorMsg)
       throw new Error('Network Error: ' + errorMsg)
     }
@@ -337,7 +348,7 @@ export const removeWatchlistItem = async (symbol, market = 'IN') => {
 
 // WebSocket connection for real-time prices
 export const createRealtimePriceConnection = (symbols, market = 'US', interval = 5, onUpdate) => {
-  const ws = new WebSocket(`ws://localhost:8000/ws/realtime-prices`)
+  const ws = new WebSocket(getRealtimeWebSocketUrl())
   
   ws.onopen = () => {
     ws.send(JSON.stringify({
@@ -366,3 +377,4 @@ export const createRealtimePriceConnection = (symbols, market = 'US', interval =
 }
 
 export default api
+export { API_BASE_URL, BACKEND_DISPLAY_URL }
