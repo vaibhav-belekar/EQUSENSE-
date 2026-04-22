@@ -38,13 +38,20 @@ const buildRecommendationFromMetrics = (metrics, pred, sym) => {
   }
 }
 
-const RecommendationCard = ({ symbol, market = 'US', onRecommendationChange, predictionMetrics, prediction }) => {
+const RecommendationCard = ({ symbol, market = 'US', onRecommendationChange, predictionMetrics, prediction, recommendationData }) => {
   const [recommendation, setRecommendation] = useState(null)
   const [loading, setLoading] = useState(true)
   const [showTooltip, setShowTooltip] = useState(false)
 
   useEffect(() => {
     if (!symbol) {
+      setLoading(false)
+      return
+    }
+
+    if (recommendationData?.recommendation) {
+      setRecommendation(recommendationData)
+      onRecommendationChange?.(recommendationData)
       setLoading(false)
       return
     }
@@ -73,7 +80,7 @@ const RecommendationCard = ({ symbol, market = 'US', onRecommendationChange, pre
     }
 
     fetchRecommendation().finally(() => setLoading(false))
-  }, [symbol, market, onRecommendationChange, predictionMetrics, prediction])
+  }, [symbol, market, onRecommendationChange, predictionMetrics, prediction, recommendationData])
 
   if (!symbol) return null
 

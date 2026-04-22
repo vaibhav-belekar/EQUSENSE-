@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 from typing import List, Dict, Optional
 import ta
+import requests
 
 
 class DataCollector:
@@ -22,6 +23,15 @@ class DataCollector:
         """
         self.symbols = symbols or ['AAPL', 'TSLA', 'MSFT', 'GOOGL', 'AMZN']
         self.data_cache = {}
+        self._http_headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            )
+        }
+        self._session = requests.Session()
+        self._session.trust_env = False
 
     def _build_symbol_candidates(self, symbol: str, market: str = "US") -> List[str]:
         """Return possible Yahoo Finance symbol variants for a stock."""
@@ -77,8 +87,10 @@ class DataCollector:
                     df = ticker.history(period=period, interval=interval)
 
                     if df.empty:
-                        print(f"[DataCollector] Warning: No data fetched for {fetch_symbol}")
-                        continue
+                        print(f"[DataCollector] Warning: No yfinance data fetched for {fetch_symbol}, trying Yahoo chart API")
+                        df = self._fetch_chart_data(fetch_symbol, period=period, interval=interval)
+                        if df.empty:
+                            continue
 
                     print(f"[DataCollector] Successfully fetched {len(df)} rows for {fetch_symbol}")
 
@@ -136,6 +148,11 @@ class DataCollector:
                         price = float(df['Close'].iloc[-1])
                         print(f"[DataCollector] Got price from history for {fetch_symbol}: {price}")
                         return price
+                    chart_df = self._fetch_chart_data(fetch_symbol, period="5d", interval="1d")
+                    if not chart_df.empty:
+                        price = float(chart_df['Close'].iloc[-1])
+                        print(f"[DataCollector] Got price from Yahoo chart API for {fetch_symbol}: {price}")
+                        return price
                 except Exception as candidate_error:
                     print(f"[DataCollector] Candidate {fetch_symbol} realtime fetch failed: {str(candidate_error)}")
                     continue
@@ -168,70 +185,171 @@ class DataCollector:
             return df
         
         try:
+            df = df.copy()
+            close = pd.to_numeric(df['Close'], errors='coerce')
+            high = pd.to_numeric(df['High'], errors='coerce')
+            low = pd.to_numeric(df['Low'], errors='coerce')
+            volume = pd.to_numeric(df['Volume'], errors='coerce')
+            data_points = len(df)
+
+            def safe_series(factory, default=np.nan):
+                try:
+                    return factory()
+                except Exception:
+                    return pd.Series(default, index=df.index, dtype='float64')
+
+            def bounded_window(target: int, minimum: int = 2) -> int:
+                return max(minimum, min(target, data_points))
+
             # RSI (Relative Strength Index)
-            df['RSI'] = ta.momentum.RSIIndicator(df['Close']).rsi()
+            df['RSI'] = safe_series(
+                lambda: ta.momentum.RSIIndicator(close, window=bounded_window(14)).rsi(),
+                default=50.0,
+            )
             
             # MACD
-            macd = ta.trend.MACD(df['Close'])
-            df['MACD'] = macd.macd()
-            df['MACD_signal'] = macd.macd_signal()
-            df['MACD_diff'] = macd.macd_diff()
+            macd_slow = bounded_window(26, minimum=3)
+            macd_fast = min(12, max(2, macd_slow - 1))
+            macd_sign = min(9, max(2, macd_fast - 1))
+            macd = ta.trend.MACD(close, window_slow=macd_slow, window_fast=macd_fast, window_sign=macd_sign)
+            df['MACD'] = safe_series(macd.macd)
+            df['MACD_signal'] = safe_series(macd.macd_signal)
+            df['MACD_diff'] = safe_series(macd.macd_diff)
             
             # Bollinger Bands
-            bollinger = ta.volatility.BollingerBands(df['Close'])
-            df['BB_high'] = bollinger.bollinger_hband()
-            df['BB_low'] = bollinger.bollinger_lband()
-            df['BB_mid'] = bollinger.bollinger_mavg()
+            bollinger = ta.volatility.BollingerBands(close, window=bounded_window(20))
+            df['BB_high'] = safe_series(bollinger.bollinger_hband, default=close)
+            df['BB_low'] = safe_series(bollinger.bollinger_lband, default=close)
+            df['BB_mid'] = safe_series(bollinger.bollinger_mavg, default=close)
             
             # Moving Averages
-            df['SMA_20'] = ta.trend.SMAIndicator(df['Close'], window=20).sma_indicator()
-            df['SMA_50'] = ta.trend.SMAIndicator(df['Close'], window=50).sma_indicator()
-            df['SMA_200'] = ta.trend.SMAIndicator(df['Close'], window=200).sma_indicator()
-            df['EMA_12'] = ta.trend.EMAIndicator(df['Close'], window=12).ema_indicator()
-            df['EMA_26'] = ta.trend.EMAIndicator(df['Close'], window=26).ema_indicator()
+            df['SMA_20'] = safe_series(
+                lambda: ta.trend.SMAIndicator(close, window=bounded_window(20)).sma_indicator(),
+                default=close,
+            )
+            df['SMA_50'] = safe_series(
+                lambda: ta.trend.SMAIndicator(close, window=bounded_window(50)).sma_indicator(),
+                default=close,
+            )
+            df['SMA_200'] = safe_series(
+                lambda: ta.trend.SMAIndicator(close, window=bounded_window(200)).sma_indicator(),
+                default=close,
+            )
+            df['EMA_12'] = safe_series(
+                lambda: ta.trend.EMAIndicator(close, window=bounded_window(12)).ema_indicator(),
+                default=close,
+            )
+            df['EMA_26'] = safe_series(
+                lambda: ta.trend.EMAIndicator(close, window=bounded_window(26)).ema_indicator(),
+                default=close,
+            )
 
             # Momentum indicators
-            df['ROC_10'] = ta.momentum.ROCIndicator(df['Close'], window=10).roc()
-            df['ROC_20'] = ta.momentum.ROCIndicator(df['Close'], window=20).roc()
-            df['Momentum_10'] = df['Close'].pct_change(10)
-            df['Momentum_20'] = df['Close'].pct_change(20)
-            df['Momentum_60'] = df['Close'].pct_change(60)
+            df['ROC_10'] = safe_series(
+                lambda: ta.momentum.ROCIndicator(close, window=bounded_window(10)).roc()
+            )
+            df['ROC_20'] = safe_series(
+                lambda: ta.momentum.ROCIndicator(close, window=bounded_window(20)).roc()
+            )
+            df['Momentum_10'] = close.pct_change(min(10, max(1, data_points - 1)))
+            df['Momentum_20'] = close.pct_change(min(20, max(1, data_points - 1)))
+            df['Momentum_60'] = close.pct_change(min(60, max(1, data_points - 1)))
 
             # Trend strength indicators
-            df['ADX'] = ta.trend.ADXIndicator(df['High'], df['Low'], df['Close']).adx()
-            df['CCI'] = ta.trend.CCIIndicator(df['High'], df['Low'], df['Close']).cci()
-            stoch = ta.momentum.StochasticOscillator(df['High'], df['Low'], df['Close'])
-            df['Stoch_K'] = stoch.stoch()
-            df['Stoch_D'] = stoch.stoch_signal()
+            adx_window = bounded_window(14, minimum=3)
+            df['ADX'] = safe_series(
+                lambda: ta.trend.ADXIndicator(high, low, close, window=adx_window).adx(),
+                default=20.0,
+            )
+            df['CCI'] = safe_series(
+                lambda: ta.trend.CCIIndicator(high, low, close, window=bounded_window(20, minimum=3)).cci()
+            )
+            stoch = ta.momentum.StochasticOscillator(
+                high,
+                low,
+                close,
+                window=bounded_window(14, minimum=3),
+                smooth_window=bounded_window(3, minimum=2),
+            )
+            df['Stoch_K'] = safe_series(stoch.stoch)
+            df['Stoch_D'] = safe_series(stoch.stoch_signal)
             
             # Volume indicators (simple moving average of volume)
-            df['Volume_SMA'] = df['Volume'].rolling(window=20).mean()
-            df['Volume_Ratio'] = df['Volume'] / df['Volume_SMA'].replace(0, np.nan)
+            df['Volume_SMA'] = volume.rolling(window=bounded_window(20), min_periods=1).mean()
+            df['Volume_Ratio'] = volume / df['Volume_SMA'].replace(0, np.nan)
             
             # ATR (Average True Range) for volatility
-            df['ATR'] = ta.volatility.AverageTrueRange(
-                df['High'], df['Low'], df['Close']
-            ).average_true_range()
+            df['ATR'] = safe_series(
+                lambda: ta.volatility.AverageTrueRange(
+                    high, low, close, window=bounded_window(14, minimum=3)
+                ).average_true_range(),
+                default=0.0,
+            )
 
             # Realized volatility and normalized trend spreads
-            returns = df['Close'].pct_change()
+            returns = close.pct_change()
             df['Return_1D'] = returns
-            df['Volatility_5'] = returns.rolling(window=5).std()
-            df['Volatility_10'] = returns.rolling(window=10).std()
-            df['Volatility_20'] = returns.rolling(window=20).std()
-            df['ATR_Pct'] = df['ATR'] / df['Close'].replace(0, np.nan)
+            df['Volatility_5'] = returns.rolling(window=bounded_window(5), min_periods=1).std()
+            df['Volatility_10'] = returns.rolling(window=bounded_window(10), min_periods=1).std()
+            df['Volatility_20'] = returns.rolling(window=bounded_window(20), min_periods=1).std()
+            df['ATR_Pct'] = df['ATR'] / close.replace(0, np.nan)
             df['Trend_Strength'] = (df['SMA_20'] - df['SMA_50']) / df['SMA_50'].replace(0, np.nan)
             df['Trend_Long'] = (df['SMA_50'] - df['SMA_200']) / df['SMA_200'].replace(0, np.nan)
-            df['MACD_Normalized'] = df['MACD_diff'] / df['Close'].replace(0, np.nan)
+            df['MACD_Normalized'] = df['MACD_diff'] / close.replace(0, np.nan)
             df['BB_Width'] = (df['BB_high'] - df['BB_low']) / df['BB_mid'].replace(0, np.nan)
             
             # Fill NaN values
-            df = df.bfill().ffill()
+            df = df.replace([np.inf, -np.inf], np.nan).bfill().ffill()
             
         except Exception as e:
             print(f"Error adding indicators: {str(e)}")
         
         return df
+
+    def _fetch_chart_data(self, symbol: str, period: str = "1y", interval: str = "1d") -> pd.DataFrame:
+        """Fallback fetch using Yahoo Finance chart API directly."""
+        try:
+            url = f"https://query1.finance.yahoo.com/v8/finance/chart/{symbol}"
+            response = self._session.get(
+                url,
+                params={"range": period, "interval": interval, "includePrePost": "false"},
+                headers=self._http_headers,
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            result = ((payload or {}).get("chart") or {}).get("result") or []
+            if not result:
+                print(f"[DataCollector] Yahoo chart API returned no result for {symbol}")
+                return pd.DataFrame()
+
+            chart = result[0]
+            timestamps = chart.get("timestamp") or []
+            quote = ((chart.get("indicators") or {}).get("quote") or [{}])[0]
+            if not timestamps or not quote:
+                return pd.DataFrame()
+
+            frame = pd.DataFrame(
+                {
+                    "Open": quote.get("open", []),
+                    "High": quote.get("high", []),
+                    "Low": quote.get("low", []),
+                    "Close": quote.get("close", []),
+                    "Volume": quote.get("volume", []),
+                },
+                index=pd.to_datetime(timestamps, unit="s", utc=True).tz_convert(None),
+            )
+
+            adjclose = ((chart.get("indicators") or {}).get("adjclose") or [{}])[0].get("adjclose")
+            if adjclose is not None:
+                frame["Adj Close"] = adjclose
+
+            frame = frame.replace([np.inf, -np.inf], np.nan).dropna(subset=["Close"])
+            frame = frame[~frame.index.duplicated(keep="last")]
+            return frame
+        except Exception as exc:
+            print(f"[DataCollector] Yahoo chart API fallback failed for {symbol}: {str(exc)}")
+            return pd.DataFrame()
     
     def get_latest_data(self, symbol: str) -> Optional[pd.DataFrame]:
         """Get the latest cached data for a symbol"""
@@ -299,7 +417,7 @@ class DataCollector:
         
         return recent_data.astype(np.float32)
 
-    def get_feature_frame(self, symbol: str, market: str = "US", period: str = "2y") -> pd.DataFrame:
+    def get_feature_frame(self, symbol: str, market: str = "US", period: str = "1y") -> pd.DataFrame:
         """
         Return a row-wise feature frame for regression-style models.
 
@@ -340,7 +458,7 @@ class DataCollector:
         symbol: str,
         forecast_horizon: int = 10,
         market: str = "US",
-        period: str = "2y"
+        period: str = "1y"
     ) -> pd.DataFrame:
         """
         Build a supervised learning frame with future return targets.
@@ -358,6 +476,7 @@ class DataCollector:
         aligned = df.loc[feature_df.index].copy()
         future_close = aligned['Close'].shift(-forecast_horizon)
         target_return_pct = ((future_close - aligned['Close']) / aligned['Close']) * 100.0
+        target_return_pct = target_return_pct.clip(-20.0, 20.0)
 
         training_df = feature_df.copy()
         training_df['target_return_pct'] = target_return_pct

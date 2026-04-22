@@ -1,125 +1,93 @@
 import React from 'react'
 import { motion } from 'framer-motion'
-import { Target, TrendingUp, TrendingDown, Minus, Plus, Bookmark, LineChart } from 'lucide-react'
+import { Target, Plus, LineChart } from 'lucide-react'
 
-const TradingCall = ({ symbol, currentPrice, prediction, predictionMetrics, recommendation, market }) => {
+const TradingCall = ({
+  symbol,
+  currentPrice,
+  prediction,
+  predictionMetrics,
+  recommendation,
+  market,
+  onAddToWatchlist,
+  onVirtualTrade,
+}) => {
   if (!currentPrice || !prediction) {
     return null
   }
 
   const signal = prediction.signal || 'Neutral'
   const confidence = prediction.confidence || 0.5
-  const expectedReturn = predictionMetrics?.expectedReturn || 0
-  const risk = predictionMetrics?.risk || 5.0
+  const expectedReturn = Number(predictionMetrics?.expectedReturn || 0)
+  const risk = Number(predictionMetrics?.risk || 5.0)
+  const recommendationLabel = recommendation?.recommendation || 'HOLD'
 
-  let tradingCall = expectedReturn > 0 ? 'BUY' : expectedReturn < 0 ? 'SELL' : 'HOLD'
-  let callColor = tradingCall === 'BUY' ? 'green' : tradingCall === 'SELL' ? 'red' : 'yellow'
-  let callBgColor = tradingCall === 'BUY' ? 'bg-green-50' : tradingCall === 'SELL' ? 'bg-red-50' : 'bg-yellow-50'
-  let callBorderColor = tradingCall === 'BUY' ? 'border-green-300' : tradingCall === 'SELL' ? 'border-red-300' : 'border-yellow-300'
-  let callTextColor = tradingCall === 'BUY' ? 'text-green-800' : tradingCall === 'SELL' ? 'text-red-800' : 'text-yellow-800'
+  const tradingCall = recommendationLabel === 'BUY' ? 'BUY' : recommendationLabel === 'AVOID' ? 'AVOID' : 'HOLD'
+  const callBgColor = tradingCall === 'BUY' ? 'bg-green-50' : tradingCall === 'AVOID' ? 'bg-red-50' : 'bg-yellow-50'
+  const callBorderColor = tradingCall === 'BUY' ? 'border-green-300' : tradingCall === 'AVOID' ? 'border-red-300' : 'border-yellow-300'
+  const callTextColor = tradingCall === 'BUY' ? 'text-green-800' : tradingCall === 'AVOID' ? 'text-red-800' : 'text-yellow-800'
+  const hasTradePlan = tradingCall === 'BUY'
 
-  // Calculate entry, stop-loss, and target prices
   let entryPrice = currentPrice
   let stopLoss = currentPrice
   let targetPrice = currentPrice
-  let riskReward = '1:1'
+  let riskReward = 'N/A'
 
   if (tradingCall === 'BUY') {
-    // For BUY: Entry at current price, Stop-loss below, Target above
-    const stopLossPercent = Math.min(risk / 100, 0.05) // Max 5% stop-loss
-    const targetPercent = Math.max(Math.abs(expectedReturn) / 100, 0.03) // Min 3% target
-    
-    entryPrice = currentPrice
+    const stopLossPercent = Math.min(Math.max(risk / 150, 0.012), 0.03)
+    const targetPercent = Math.min(Math.max(Math.abs(expectedReturn) / 100, 0.02), 0.06)
+
     stopLoss = currentPrice * (1 - stopLossPercent)
     targetPrice = currentPrice * (1 + targetPercent)
-    
-    // Calculate risk/reward ratio
+
     const riskAmount = entryPrice - stopLoss
     const rewardAmount = targetPrice - entryPrice
     if (riskAmount > 0) {
-      const ratio = (rewardAmount / riskAmount).toFixed(1)
-      riskReward = `1:${ratio}`
+      riskReward = `1:${(rewardAmount / riskAmount).toFixed(1)}`
     }
-  } else if (tradingCall === 'SELL') {
-    // For SELL: Entry at current price, Stop-loss above, Target below
-    const stopLossPercent = Math.min(risk / 100, 0.05) // Max 5% stop-loss
-    const targetPercent = Math.max(Math.abs(expectedReturn) / 100, 0.03) // Min 3% target
-    
-    entryPrice = currentPrice
-    stopLoss = currentPrice * (1 + stopLossPercent)
-    targetPrice = currentPrice * (1 - targetPercent)
-    
-    // Calculate risk/reward ratio
-    const riskAmount = stopLoss - entryPrice
-    const rewardAmount = entryPrice - targetPrice
-    if (riskAmount > 0) {
-      const ratio = (rewardAmount / riskAmount).toFixed(1)
-      riskReward = `1:${ratio}`
-    }
+  } else if (tradingCall === 'AVOID') {
+    riskReward = 'No trade'
   } else {
-    // HOLD: Show neutral values
-    entryPrice = currentPrice
-    stopLoss = currentPrice * 0.98 // 2% stop-loss
-    targetPrice = currentPrice * 1.02 // 2% target
-    riskReward = '1:1'
+    riskReward = 'Wait'
   }
 
-  // Determine timeframe based on investment period or default
-  const getTimeframe = () => {
-    if (tradingCall === 'HOLD') {
-      return 'Medium Term (1-4 Weeks)'
-    }
-    if (Math.abs(expectedReturn) > 5) {
-      return 'Short Term (5-10 Days)'
-    } else if (Math.abs(expectedReturn) > 2) {
-      return 'Very Short Term (2-5 Days)'
-    } else {
-      return 'Short Term (5-10 Days)'
-    }
+  const timeframe = tradingCall === 'AVOID'
+    ? 'Wait for Better Setup'
+    : tradingCall === 'HOLD'
+      ? 'Medium Term (1-4 Weeks)'
+      : Math.abs(expectedReturn) > 3
+        ? 'Short Term (5-10 Days)'
+        : Math.abs(expectedReturn) > 1.5
+          ? 'Swing Window (1-2 Weeks)'
+          : 'Swing Window (1-3 Weeks)'
+
+  const rationale = []
+  if (signal === 'Up') {
+    rationale.push('Price trend indicates upward momentum.')
+    if (confidence >= 0.65) rationale.push('Confidence is supportive for a bullish setup.')
+    if (expectedReturn > 0) rationale.push('Expected return remains positive after calibration.')
+  } else if (signal === 'Down') {
+    rationale.push('Price trend indicates downward momentum.')
+    if (confidence >= 0.65) rationale.push('Confidence is relatively high for a bearish signal.')
+    if (expectedReturn < -1.5) rationale.push('Downside risk is stronger than near-term reward.')
+  } else {
+    rationale.push('Price trend is neutral.')
+    rationale.push('The setup is not strong enough for an aggressive trade.')
   }
 
-  // Generate rationale based on prediction and metrics
-  const getRationale = () => {
-    const reasons = []
-    
-    if (signal === 'Up') {
-      reasons.push('Price trend indicates upward momentum.')
-      if (confidence >= 0.7) {
-        reasons.push('High confidence in bullish signal.')
-      }
-      if (expectedReturn > 0) {
-        reasons.push('Expected return remains positive.')
-      }
-    } else if (signal === 'Down') {
-      reasons.push('Price trend indicates downward momentum.')
-      if (confidence >= 0.7) {
-        reasons.push('High confidence in bearish signal.')
-      }
-      if (expectedReturn < -5) {
-        reasons.push('Significant downside risk identified.')
-      }
-    } else {
-      reasons.push('Price trend is neutral.')
-      reasons.push('Moderate confidence in current levels.')
-    }
-    
-    if (risk > 7) {
-      reasons.push('High volatility detected - use appropriate position sizing.')
-    } else if (risk < 3) {
-      reasons.push('Low volatility - relatively stable price action.')
-    }
-    
-    return reasons
-  }
+  if (risk > 7) rationale.push('High volatility detected, so position sizing should stay conservative.')
+  else if (risk < 3) rationale.push('Volatility is relatively contained at current levels.')
 
-  const rationale = getRationale()
-  const timeframe = getTimeframe()
+  if (tradingCall === 'AVOID') rationale.push('No fresh long entry is recommended until the setup improves.')
+  else if (tradingCall === 'HOLD') rationale.push('Waiting for cleaner confirmation is safer than forcing an entry here.')
 
-  // Format price based on market
   const currencySymbol = market === 'IN' ? '₹' : '$'
-  const formatPrice = (price) => {
-    return `${currencySymbol}${price.toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
-  }
+  const formatPrice = (price) => `${currencySymbol}${Number(price).toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
+  const planStatusText = tradingCall === 'AVOID'
+    ? 'Avoid fresh long entries for now.'
+    : tradingCall === 'HOLD'
+      ? 'Wait for a cleaner confirmation before entering.'
+      : riskReward
 
   return (
     <motion.div
@@ -128,7 +96,6 @@ const TradingCall = ({ symbol, currentPrice, prediction, predictionMetrics, reco
       transition={{ delay: 0.15 }}
       className={`bg-white rounded-xl shadow-md p-6 border-2 ${callBorderColor} ${callBgColor}`}
     >
-      {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <Target className={`w-6 h-6 ${callTextColor}`} />
@@ -137,54 +104,54 @@ const TradingCall = ({ symbol, currentPrice, prediction, predictionMetrics, reco
           </h3>
         </div>
         <div className="flex items-center gap-2">
-          <button className="px-3 py-1.5 border-2 border-blue-500 bg-white text-blue-600 rounded-lg text-sm font-semibold hover:bg-blue-50 transition-colors flex items-center gap-1">
+          <button
+            onClick={() => onAddToWatchlist && onAddToWatchlist(symbol)}
+            className="px-3 py-1.5 border-2 border-blue-500 bg-white text-blue-600 rounded-lg text-sm font-semibold hover:bg-blue-50 transition-colors flex items-center gap-1"
+          >
             <Plus className="w-4 h-4" />
             Add to Watchlist
           </button>
-          <button className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700 transition-colors flex items-center gap-1">
+          <button
+            onClick={() => onVirtualTrade && onVirtualTrade(symbol)}
+            className="px-3 py-1.5 bg-green-600 text-white rounded-lg text-sm font-semibold hover:bg-green-700 transition-colors flex items-center gap-1"
+          >
             <LineChart className="w-4 h-4" />
             Virtual Trade
           </button>
         </div>
       </div>
 
-      {/* Trading Parameters */}
       <div className="grid grid-cols-4 gap-4 mb-4">
         <div>
-          <p className="text-xs font-semibold text-gray-600 mb-1">Entry Price</p>
-          <p className="text-lg font-bold text-gray-900">
-            {formatPrice(entryPrice)}
+          <p className="text-xs font-semibold text-gray-600 mb-1">{hasTradePlan ? 'Entry Price' : 'Current Price'}</p>
+          <p className="text-lg font-bold text-gray-900">{formatPrice(hasTradePlan ? entryPrice : currentPrice)}</p>
+        </div>
+        <div>
+          <p className="text-xs font-semibold text-gray-600 mb-1">{hasTradePlan ? 'Stop-Loss' : 'Trade Setup'}</p>
+          <p className={`text-lg font-bold ${hasTradePlan ? 'text-red-600' : callTextColor}`}>
+            {hasTradePlan ? formatPrice(stopLoss) : tradingCall}
           </p>
         </div>
         <div>
-          <p className="text-xs font-semibold text-gray-600 mb-1">Stop-Loss</p>
-          <p className="text-lg font-bold text-red-600">
-            {formatPrice(stopLoss)}
+          <p className="text-xs font-semibold text-gray-600 mb-1">{hasTradePlan ? 'Target Price' : 'Action'}</p>
+          <p className={`text-lg font-bold ${hasTradePlan ? 'text-green-600' : 'text-gray-900'}`}>
+            {hasTradePlan ? formatPrice(targetPrice) : riskReward}
           </p>
         </div>
         <div>
-          <p className="text-xs font-semibold text-gray-600 mb-1">Target Price</p>
-          <p className="text-lg font-bold text-green-600">
-            {formatPrice(targetPrice)}
-          </p>
-        </div>
-        <div>
-          <p className="text-xs font-semibold text-gray-600 mb-1">Risk/Reward</p>
-          <p className="text-lg font-bold text-gray-900">{riskReward}</p>
+          <p className="text-xs font-semibold text-gray-600 mb-1">{hasTradePlan ? 'Risk/Reward' : 'Status'}</p>
+          <p className="text-lg font-bold text-gray-900">{planStatusText}</p>
         </div>
       </div>
 
-      {/* Estimated Timeframe */}
       <div className="text-center mb-4">
         <p className="text-xs text-gray-600">
           <span className="font-semibold">Estimated Timeframe:</span> {timeframe}
         </p>
       </div>
 
-      {/* Divider */}
       <div className="border-t border-gray-300 my-4"></div>
 
-      {/* Rationale */}
       <div>
         <p className="text-sm font-bold text-gray-900 mb-2">Rationale:</p>
         <ul className="space-y-1">
@@ -201,4 +168,3 @@ const TradingCall = ({ symbol, currentPrice, prediction, predictionMetrics, reco
 }
 
 export default TradingCall
-

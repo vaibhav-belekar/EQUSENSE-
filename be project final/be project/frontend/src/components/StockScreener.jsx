@@ -21,7 +21,8 @@ import {
   getStatus,
   getCompanyInfo,
   getOHLCData,
-  getRecommendation
+  getRecommendation,
+  addWatchlistItem
 } from '../services/api'
 import StockAnalysisReport from './StockAnalysisReport'
 import HistoricalAnalysis from './HistoricalAnalysis'
@@ -34,6 +35,7 @@ import PortfolioSummary from './PortfolioSummary'
 import ComparisonTable from './ComparisonTable'
 import AIPrediction from './AIPrediction'
 import TradingCall from './TradingCall'
+import StockComparison from './StockComparison'
 
 const StockScreener = () => {
   const [searchTerm, setSearchTerm] = useState('')
@@ -55,6 +57,8 @@ const StockScreener = () => {
   const [companyInfo, setCompanyInfo] = useState(null)
   const [predictionMetrics, setPredictionMetrics] = useState(null)
   const [recommendation, setRecommendation] = useState(null)
+  const [showComparisonModal, setShowComparisonModal] = useState(false)
+  const [comparisonStocks, setComparisonStocks] = useState([])
   const activeSearchRequestRef = useRef(0)
 
   // Check backend status on mount and periodically
@@ -98,6 +102,42 @@ const StockScreener = () => {
 
   // Available stocks for search (from API or fallback) - initialize with fallback
   const [availableStocks, setAvailableStocks] = useState(fallbackStocks.IN)
+
+  const comparisonCandidates = useMemo(() => {
+    if (!selectedStockData) return []
+
+    const mergedStocks = [
+      selectedStockData,
+      ...searchResults.filter((stock) => stock.symbol !== selectedStockData.symbol)
+    ]
+
+    return mergedStocks
+      .filter((stock) => stock?.symbol)
+      .slice(0, 5)
+      .map((stock) => {
+        const isCurrent = stock.symbol === selectedStockData.symbol
+        const effectivePrediction = isCurrent ? selectedStockData.prediction : stock.prediction
+        const effectiveExpectedReturn = isCurrent
+          ? (predictionMetrics?.expectedReturn ?? recommendation?.expected_return ?? effectivePrediction?.expected_return ?? 0)
+          : (stock.prediction?.expected_return ?? 0)
+        const effectiveRisk = isCurrent
+          ? (predictionMetrics?.risk ?? recommendation?.risk ?? effectivePrediction?.risk ?? 5)
+          : (stock.prediction?.risk ?? 5)
+        const current = Number(stock.price || stockPrices[stock.symbol] || 0)
+        const predicted = current * (1 + (effectiveExpectedReturn / 100))
+
+        return {
+          symbol: stock.symbol,
+          current_price: current,
+          predicted_price: predicted,
+          prediction: effectivePrediction || { signal: 'Neutral', confidence: 0.5 },
+          expected_return: effectiveExpectedReturn,
+          risk_score: effectiveRisk,
+          profit_loss: predicted - current,
+          profit_loss_percent: effectiveExpectedReturn
+        }
+      })
+  }, [selectedStockData, searchResults, stockPrices, predictionMetrics, recommendation])
 
   useEffect(() => {
     document.title = 'Equisense - Stock Screener & Investment Analyzer'
@@ -182,8 +222,10 @@ const StockScreener = () => {
     const confidence = selectedStockData?.prediction?.confidence ?? ((recommendation?.confidence ?? 50) / 100)
 
     const investmentAmountValue = parseFloat(investmentAmount)
-    const investmentPeriodValue = parseInt(investmentPeriod)
-    const predictedPrice = currentPrice * (1 + (expectedReturn / 100))
+    const investmentPeriodValue = Math.max(1, parseInt(investmentPeriod))
+    const forecastHorizonDays = Math.max(1, parseInt(selectedStockData?.prediction?.forecast_horizon_days ?? 10))
+    const scaledReturn = Math.pow(1 + (expectedReturn / 100), investmentPeriodValue / forecastHorizonDays) - 1
+    const predictedPrice = currentPrice * (1 + scaledReturn)
     const shares = investmentAmountValue / currentPrice
     const predictedValue = shares * predictedPrice
     const profitLoss = predictedValue - investmentAmountValue
@@ -201,7 +243,7 @@ const StockScreener = () => {
         symbol,
         current_price: currentPrice,
         predicted_price: predictedPrice,
-        price_change_percent: expectedReturn,
+        price_change_percent: scaledReturn * 100,
         investment_amount: investmentAmountValue,
         investment_period: investmentPeriodValue,
         shares,
@@ -211,11 +253,12 @@ const StockScreener = () => {
         prediction: {
           signal,
           confidence,
-          expected_return: expectedReturn,
+          expected_return: scaledReturn * 100,
           risk: riskScore,
-          score
+          score,
+          forecast_horizon_days: forecastHorizonDays
         },
-        expected_return: expectedReturn,
+        expected_return: scaledReturn * 100,
         risk: riskScore,
         score,
         agent_reports: {
@@ -442,7 +485,8 @@ const StockScreener = () => {
       
       // Show success message (even if some data is missing)
       if (price) {
-        toast.success(`Found ${symbol} - ₹${price.toFixed(2)}`)
+        const currencySymbol = market === 'IN' ? '₹' : '$'
+        toast.success(`Found ${symbol} - ${currencySymbol}${price.toFixed(2)}`)
       } else {
         toast.success(`Found ${symbol}`)
       }
@@ -698,6 +742,72 @@ const StockScreener = () => {
     setShowChart(true)
   }
 
+  const handleAddToWatchlist = async (symbol) => {
+    const upperSymbol = (symbol || '').toUpperCase()
+    if (!upperSymbol) {
+      toast.error('No stock selected for watchlist.')
+      return
+    }
+
+    try {
+      await addWatchlistItem(upperSymbol, market)
+    } catch (error) {
+      console.warn('Watchlist DB add failed, keeping local fallback:', error)
+    }
+
+    const existing = JSON.parse(localStorage.getItem('watchlist') || '[]')
+    if (!existing.includes(upperSymbol)) {
+      localStorage.setItem('watchlist', JSON.stringify([...existing, upperSymbol]))
+      toast.success(`${upperSymbol} added to watchlist`)
+    } else {
+      toast.success(`${upperSymbol} is already in your watchlist`)
+    }
+  }
+
+  const handleVirtualTrade = (symbol) => {
+    const tradeSymbol = (symbol || selectedStockData?.symbol || '').toUpperCase()
+    const price = Number(selectedStockData?.price || stockPrices[tradeSymbol] || 0)
+    if (!tradeSymbol || !price) {
+      toast.error('Stock price is unavailable for virtual trade.')
+      return
+    }
+
+    const action = recommendation?.recommendation === 'BUY'
+      ? 'Buy'
+      : recommendation?.recommendation === 'AVOID'
+        ? 'Avoid'
+        : 'Hold'
+
+    const existingTrades = JSON.parse(localStorage.getItem('paperTrades') || '[]')
+    const trade = {
+      id: Date.now(),
+      symbol: tradeSymbol,
+      action,
+      price,
+      market,
+      expectedReturn: Number(predictionMetrics?.expectedReturn ?? recommendation?.expected_return ?? 0),
+      risk: Number(predictionMetrics?.risk ?? recommendation?.risk ?? 0),
+      createdAt: new Date().toISOString()
+    }
+
+    localStorage.setItem('paperTrades', JSON.stringify([trade, ...existingTrades].slice(0, 50)))
+    toast.success(`Virtual trade saved for ${tradeSymbol}`)
+  }
+
+  const handleOpenComparison = () => {
+    if (comparisonCandidates.length < 2) {
+      toast.error('At least 2 stocks are needed for comparison.')
+      return
+    }
+
+    setComparisonStocks(comparisonCandidates)
+    setShowComparisonModal(true)
+  }
+
+  const handleRemoveComparisonStock = (symbol) => {
+    setComparisonStocks((prev) => prev.filter((stock) => stock.symbol !== symbol))
+  }
+
   const handleRemoveFromResults = (symbol) => {
     setSearchResults(prev => prev.filter(s => s.symbol !== symbol))
     setStockPrices(prev => {
@@ -907,6 +1017,8 @@ const StockScreener = () => {
                 predictionMetrics={predictionMetrics}
                 recommendation={recommendation}
                 market={market}
+                onAddToWatchlist={handleAddToWatchlist}
+                onVirtualTrade={handleVirtualTrade}
               />
 
               {/* Company Info */}
@@ -930,6 +1042,7 @@ const StockScreener = () => {
               {/* News Sentiment */}
               <NewsSentiment 
                 symbol={selectedStockData.symbol}
+                market={market}
                 onFullAnalyze={handleAnalyze}
                 onViewChart={handleViewChart}
               />
@@ -941,6 +1054,7 @@ const StockScreener = () => {
               <RecommendationCard 
                 symbol={selectedStockData.symbol} 
                 market={market}
+                recommendationData={recommendation}
                 predictionMetrics={predictionMetrics}
                 prediction={selectedStockData.prediction}
               />
@@ -962,6 +1076,9 @@ const StockScreener = () => {
               {/* Comparison Table */}
               <ComparisonTable
                 currentSymbol={selectedStockData.symbol}
+                comparisonStocks={comparisonCandidates}
+                market={market}
+                onCompare={handleOpenComparison}
               />
             </div>
           </div>
@@ -1110,6 +1227,8 @@ const StockScreener = () => {
             analysis={analysisResult}
             investmentAmount={parseFloat(investmentAmount)}
             investmentPeriod={parseInt(investmentPeriod)}
+            market={market}
+            recommendation={recommendation}
             onClose={() => {
               setAnalysisResult(null)
               setSelectedStockForAnalysis(null)
@@ -1139,6 +1258,14 @@ const StockScreener = () => {
               setShowChart(false)
               setSelectedStock(null)
             }}
+          />
+        )}
+
+        {showComparisonModal && comparisonStocks.length > 0 && (
+          <StockComparison
+            stocks={comparisonStocks}
+            onClose={() => setShowComparisonModal(false)}
+            onRemoveStock={handleRemoveComparisonStock}
           />
         )}
       </div>

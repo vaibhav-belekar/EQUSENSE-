@@ -1,20 +1,34 @@
 import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Star, StarOff, Plus, X, TrendingUp, TrendingDown } from 'lucide-react'
-import { getPredictions } from '../services/api'
+import { Star, StarOff, Plus, X } from 'lucide-react'
+import { addWatchlistItem, getPredictions, getWatchlist, removeWatchlistItem } from '../services/api'
 
 const Watchlist = ({ onStockSelect, onCompare }) => {
   const [watchlist, setWatchlist] = useState([])
   const [predictions, setPredictions] = useState({})
   const [showAddModal, setShowAddModal] = useState(false)
   const [newSymbol, setNewSymbol] = useState('')
+  const [loading, setLoading] = useState(true)
 
-  // Load watchlist from localStorage
   useEffect(() => {
-    const saved = localStorage.getItem('watchlist')
-    if (saved) {
-      setWatchlist(JSON.parse(saved))
+    const loadWatchlist = async () => {
+      try {
+        const result = await getWatchlist()
+        const symbols = (result.items || []).map((item) => item.symbol)
+        setWatchlist(symbols)
+        localStorage.setItem('watchlist', JSON.stringify(symbols))
+      } catch (error) {
+        console.error('Error loading DB watchlist, using local fallback:', error)
+        const saved = localStorage.getItem('watchlist')
+        if (saved) {
+          setWatchlist(JSON.parse(saved))
+        }
+      } finally {
+        setLoading(false)
+      }
     }
+
+    loadWatchlist()
   }, [])
 
   // Fetch predictions for watchlist stocks
@@ -52,12 +66,27 @@ const Watchlist = ({ onStockSelect, onCompare }) => {
     localStorage.setItem('watchlist', JSON.stringify(updated))
   }
 
-  const handleAddSymbol = () => {
-    if (newSymbol.trim()) {
-      addToWatchlist(newSymbol.trim())
-      setNewSymbol('')
-      setShowAddModal(false)
+  const handleAddSymbol = async () => {
+    if (!newSymbol.trim()) return
+
+    const symbol = newSymbol.trim().toUpperCase()
+    try {
+      await addWatchlistItem(symbol)
+    } catch (error) {
+      console.error('Error adding DB watchlist item, keeping local fallback:', error)
     }
+    addToWatchlist(symbol)
+    setNewSymbol('')
+    setShowAddModal(false)
+  }
+
+  const handleRemoveSymbol = async (symbol) => {
+    try {
+      await removeWatchlistItem(symbol)
+    } catch (error) {
+      console.error('Error removing DB watchlist item, keeping local fallback:', error)
+    }
+    removeFromWatchlist(symbol)
   }
 
   const getSignalColor = (signal) => {
@@ -68,7 +97,7 @@ const Watchlist = ({ onStockSelect, onCompare }) => {
     }
   }
 
-  if (watchlist.length === 0) {
+  if (!loading && watchlist.length === 0) {
     return (
       <motion.div
         initial={{ opacity: 0, y: 20 }}
@@ -181,7 +210,7 @@ const Watchlist = ({ onStockSelect, onCompare }) => {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3 flex-1">
                   <button
-                    onClick={() => removeFromWatchlist(symbol)}
+                    onClick={() => handleRemoveSymbol(symbol)}
                     className="text-yellow-500 hover:text-yellow-400"
                   >
                     <StarOff className="w-5 h-5" />
@@ -199,7 +228,7 @@ const Watchlist = ({ onStockSelect, onCompare }) => {
                   )}
                 </div>
                 <button
-                  onClick={() => removeFromWatchlist(symbol)}
+                  onClick={() => handleRemoveSymbol(symbol)}
                   className="text-gray-400 hover:text-red-400"
                 >
                   <X className="w-4 h-4" />

@@ -11,6 +11,8 @@ import {
 } from 'recharts'
 
 const StockPriceChart = ({ priceData, symbol, currentPrice }) => {
+  const isIndianSymbol = /\.NS$|\.BO$/i.test(symbol || '')
+  const currencySymbol = isIndianSymbol ? 'Rs' : '$'
   const chartData = priceData?.map(item => ({
     date: item.date || item.time,
     price: item.price || item.close || item.value,
@@ -34,7 +36,7 @@ const StockPriceChart = ({ priceData, symbol, currentPrice }) => {
         <h3 className="text-lg font-semibold text-gray-900 mb-2">Stock Price</h3>
         {hasPrice ? (
           <div className="flex items-center gap-4">
-            <span className="text-2xl font-bold text-gray-900">Rs {latestPrice.toFixed(2)}</span>
+            <span className="text-2xl font-bold text-gray-900">{currencySymbol} {latestPrice.toFixed(2)}</span>
             <span className={`text-sm font-semibold ${change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
               {change >= 0 ? '+' : ''}{change.toFixed(2)} ({changePercent >= 0 ? '+' : ''}{changePercent.toFixed(2)}%)
             </span>
@@ -65,7 +67,7 @@ const StockPriceChart = ({ priceData, symbol, currentPrice }) => {
                 borderRadius: '8px',
                 padding: '8px'
               }}
-              formatter={(value) => [`Rs ${value.toFixed(2)}`, 'Price']}
+              formatter={(value) => [`${currencySymbol} ${value.toFixed(2)}`, 'Price']}
             />
             <Line
               type="monotone"

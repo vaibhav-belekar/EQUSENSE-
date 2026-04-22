@@ -119,6 +119,48 @@ def calculate_risk_score(volatility: float) -> float:
     return risk
 
 
+def get_risk_level_from_score(risk_score: float) -> str:
+    """
+    Convert a 0-10 risk score into a display-friendly label.
+    """
+    if risk_score <= 3.0:
+        return "Low"
+    if risk_score <= 6.0:
+        return "Medium"
+    return "High"
+
+
+def calculate_effective_risk(
+    volatility: float,
+    expected_return: Optional[float] = None,
+    confidence: float = DEFAULT_CONFIDENCE,
+) -> Tuple[float, str, list]:
+    """
+    Blend realized volatility with downside outlook so negative-return setups do not
+    show unrealistically low risk.
+    """
+    base_risk = calculate_risk_score(volatility)
+    _, alerts = calculate_risk_level(volatility)
+    alerts = list(alerts)
+    effective_risk = base_risk
+
+    if expected_return is not None and expected_return < 0:
+        downside_penalty = min(4.0, abs(expected_return) * (0.35 + 0.65 * confidence))
+        effective_risk = min(10.0, base_risk + downside_penalty)
+
+        minimum_downside_risk = 4.0
+        if expected_return <= -4.0 and confidence >= 0.65:
+            minimum_downside_risk = 6.5
+
+        effective_risk = max(effective_risk, minimum_downside_risk)
+        alerts.append(
+            f"Negative return outlook ({expected_return:.2f}%) increases downside risk at {confidence*100:.1f}% confidence."
+        )
+
+    risk_level = get_risk_level_from_score(effective_risk)
+    return effective_risk, risk_level, alerts
+
+
 def calculate_expected_return(signal: str, confidence: float) -> float:
     """
     Derive a continuous return estimate from direction and confidence.
@@ -148,7 +190,7 @@ def get_recommendation_from_score(score: float, confidence: float, expected_retu
     """
     Return decision labels aligned with the agents.
     """
-    risk_level = "Low" if risk <= 3.0 else "Medium" if risk <= 6.0 else "High"
+    risk_level = get_risk_level_from_score(risk)
 
     if expected_return > 0 and risk <= RISK_SCORE_BUY and score > 0:
         recommendation = "BUY"
@@ -219,7 +261,10 @@ def generate_unified_recommendation(
     volatility: float,
     current_price: float = None,
     investment_amount: float = None,
-    portfolio_value: float = None
+    portfolio_value: float = None,
+    sentiment_score: float = 0.0,
+    sentiment_label: str = "Neutral",
+    base_expected_return: Optional[float] = None,
 ) -> Dict:
     """
     Generate unified recommendation using the same logic as all agents
@@ -236,13 +281,22 @@ def generate_unified_recommendation(
     Returns:
         Dictionary with recommendation, risk assessment, and all metrics
     """
+    sentiment_score = float(np.clip(sentiment_score or 0.0, -1.0, 1.0))
+    base_return = (
+        float(base_expected_return)
+        if base_expected_return is not None
+        else calculate_expected_return(signal, confidence)
+    )
+    sentiment_impact = sentiment_score * 1.0
+    expected_return = float(np.clip(base_return + sentiment_impact, -12.0, 12.0))
+
     # Calculate risk score
-    risk = calculate_risk_score(volatility)
-    risk_level, risk_alerts = calculate_risk_level(volatility)
-    
-    # Calculate expected return
-    expected_return = calculate_expected_return(signal, confidence)
-    
+    risk, risk_level, risk_alerts = calculate_effective_risk(
+        volatility,
+        expected_return=expected_return,
+        confidence=confidence,
+    )
+
     # Calculate recommendation score
     score = calculate_recommendation_score(expected_return, risk)
     
@@ -265,6 +319,12 @@ def generate_unified_recommendation(
             risk_alerts.append(f"Position size ({position_size_percent:.1f}%) exceeds recommended {MAX_POSITION_SIZE*100:.0f}% limit.")
         elif position_size_percent > POSITION_SIZE_WARNING * 100:
             risk_alerts.append(f"Position size ({position_size_percent:.1f}%) is above {POSITION_SIZE_WARNING*100:.0f}% threshold.")
+
+    if abs(sentiment_impact) >= 0.1:
+        direction = "boosts" if sentiment_impact > 0 else "reduces"
+        risk_alerts.append(
+            f"{sentiment_label} news sentiment {direction} expected return by {abs(sentiment_impact):.2f}%."
+        )
     
     return {
         "signal": signal,
@@ -280,6 +340,10 @@ def generate_unified_recommendation(
         "recommendation_reason": recommendation_data["reason"],
         "trader_action": trader_action,
         "auditor_recommendation": auditor_recommendation,
-        "position_size_percent": position_size_percent
+        "position_size_percent": position_size_percent,
+        "sentiment_score": round(sentiment_score, 3),
+        "sentiment_label": sentiment_label,
+        "sentiment_impact": round(sentiment_impact, 2),
+        "base_expected_return": round(base_return, 2),
     }
 

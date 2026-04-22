@@ -254,6 +254,29 @@ export const getRecommendation = async (symbol, market = 'US') => {
   }
 }
 
+export const getNewsSentiment = async (symbol, market = 'US', refresh = false) => {
+  try {
+    const response = await api.get(`/api/news-sentiment/${symbol}`, {
+      params: { market, refresh },
+      timeout: 15000
+    })
+    return response.data
+  } catch (error) {
+    console.error('[API] Error fetching news sentiment:', error)
+    return {
+      success: true,
+      symbol,
+      market,
+      score: 0,
+      label: 'Neutral',
+      article_count: 0,
+      headlines: [],
+      message: 'News sentiment is temporarily unavailable.',
+      cached: false
+    }
+  }
+}
+
 // Get company information
 export const getCompanyInfo = async (symbol, market = 'US') => {
   try {
@@ -280,6 +303,36 @@ export const getCompanyInfo = async (symbol, market = 'US') => {
       market: market
     }
   }
+}
+
+export const getAnalysisHistory = async (limit = 20, symbol = null, market = null) => {
+  const response = await api.get('/api/analysis-history', {
+    params: { limit, symbol, market }
+  })
+  return response.data
+}
+
+export const getWatchlist = async (market = 'IN') => {
+  const response = await api.get('/api/watchlist', {
+    params: { market }
+  })
+  return response.data
+}
+
+export const addWatchlistItem = async (symbol, market = 'IN', notes = null) => {
+  const response = await api.post('/api/watchlist', {
+    symbol,
+    market,
+    notes,
+  })
+  return response.data
+}
+
+export const removeWatchlistItem = async (symbol, market = 'IN') => {
+  const response = await api.delete(`/api/watchlist/${symbol}`, {
+    params: { market }
+  })
+  return response.data
 }
 
 // WebSocket connection for real-time prices

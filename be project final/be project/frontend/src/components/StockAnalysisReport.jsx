@@ -24,14 +24,23 @@ import {
   ResponsiveContainer
 } from 'recharts'
 
-const currency = (value) => `Rs ${Number(value || 0).toFixed(2)}`
+const normalizeRecommendationLabel = (value) => {
+  const normalized = String(value || '').trim().toUpperCase()
+  if (normalized === 'BUY') return 'BUY'
+  if (normalized === 'AVOID') return 'AVOID'
+  if (normalized === 'HOLD') return 'HOLD'
+  return ''
+}
 
-const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPeriod, onClose }) => {
+const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPeriod, market, recommendation, onClose }) => {
   if (!analysis || !analysis.success) return null
 
   const report = analysis.report || {}
   const prediction = report.prediction || {}
   const agentReports = report.agent_reports || {}
+  const effectiveMarket = report.market || market || (/\.NS$|\.BO$/i.test(symbol || '') ? 'IN' : 'US')
+  const currencySymbol = effectiveMarket === 'IN' ? 'Rs' : '$'
+  const currency = (value) => `${currencySymbol} ${Number(value || 0).toFixed(2)}`
 
   const expectedReturn = Number(report.expected_return ?? prediction.expected_return ?? agentReports.analyst?.expected_return ?? 0.2)
   const modeledRisk = Number(report.risk ?? prediction.risk ?? agentReports.analyst?.risk ?? 5.0)
@@ -49,14 +58,42 @@ const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPer
   const priceChange = predictedPrice - currentPrice
   const priceChangePercent = hasValidPrice ? (priceChange / currentPrice) * 100 : 0
 
-  let recommendationFromReport = 'HOLD'
-  let recommendationColor = 'yellow'
-  if (expectedReturn > 0 && modeledRisk <= 8 && score > 0) {
-    recommendationFromReport = 'BUY'
-    recommendationColor = 'green'
-  } else if (expectedReturn < 0) {
-    recommendationFromReport = 'AVOID'
-    recommendationColor = 'red'
+  const reportRecommendation = normalizeRecommendationLabel(
+    recommendation?.recommendation ||
+    report.recommendation ||
+    agentReports.trader?.action
+  )
+
+  const recommendationFromReport = reportRecommendation || (
+    expectedReturn > 0 && modeledRisk <= 8 && score > 0
+      ? 'BUY'
+      : expectedReturn < 0
+        ? 'AVOID'
+        : 'HOLD'
+  )
+
+  const recommendationColor =
+    recommendationFromReport === 'BUY'
+      ? 'green'
+      : recommendationFromReport === 'AVOID'
+        ? 'red'
+        : 'yellow'
+
+  const reportRecommendationData = {
+    success: true,
+    symbol,
+    recommendation: recommendationFromReport,
+    reason:
+      recommendation?.reason ||
+      agentReports.trader?.reasoning ||
+      agentReports.auditor?.reasoning ||
+      'Recommendation derived from the latest analysis report.',
+    color: recommendationColor,
+    score,
+    expected_return: expectedReturn,
+    risk: modeledRisk,
+    confidence: Number((prediction.confidence ?? 0.5) * 100),
+    signal: prediction.signal || 'Neutral'
   }
 
   const chartData = []
@@ -105,6 +142,7 @@ const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPer
           <RecommendationCard
             symbol={symbol}
             market={report.market || 'US'}
+            recommendationData={reportRecommendationData}
             predictionMetrics={{
               expectedReturn,
               risk: modeledRisk,

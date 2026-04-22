@@ -48,7 +48,7 @@ class AnalystAgent:
                     symbol,
                     forecast_horizon=self.forecast_horizon,
                     market=self.default_market,
-                    period="2y"
+                    period="1y"
                 )
 
                 if training_df.empty or len(training_df) < 80:
@@ -57,7 +57,7 @@ class AnalystAgent:
 
                 metrics = self.models[symbol].train(training_df)
                 print(
-                    f"[Analyst] Trained {symbol} regression model "
+                    f"[Analyst] Trained {symbol} {metrics['primary_model']} model "
                     f"(samples={metrics['samples']}, mae={metrics['mae']:.2f}, r2={metrics['r2']:.2f})"
                 )
             except Exception as e:
@@ -87,7 +87,12 @@ class AnalystAgent:
             else:
                 raw_return = self._estimate_return_from_indicators(df)
 
-            prediction = self._compose_prediction(df, raw_return, model.metrics.r2 if model and model.is_trained else 0.0)
+            prediction = self._compose_prediction(
+                df,
+                raw_return,
+                model.metrics.r2 if model and model.is_trained else 0.0,
+                model.metrics.mae if model and model.is_trained else 6.0,
+            )
 
             self.predictions[symbol] = prediction
             self.predictions[base_symbol] = prediction
@@ -111,17 +116,19 @@ class AnalystAgent:
     def get_prediction(self, symbol: str) -> Optional[Dict[str, any]]:
         return self.predictions.get(symbol)
 
-    def _compose_prediction(self, df: pd.DataFrame, raw_return: float, model_quality: float) -> Dict[str, any]:
+    def _compose_prediction(self, df: pd.DataFrame, raw_return: float, model_quality: float, model_mae: float) -> Dict[str, any]:
         indicator_return = self._estimate_return_from_indicators(df)
-        blended_return = 0.65 * raw_return + 0.35 * indicator_return
-        expected_return = self._sanitize_expected_return(blended_return, indicator_return)
+        model_reliability = self._estimate_model_reliability(model_quality, model_mae)
+        model_weight = 0.2 + (0.35 * model_reliability)
+        blended_return = (model_weight * raw_return) + ((1.0 - model_weight) * indicator_return)
+        expected_return = self._calibrate_expected_return(df, blended_return, indicator_return, model_reliability)
         risk = self._estimate_risk(df)
         score = expected_return / max(risk, 0.5)
-        confidence = self._calculate_confidence(df, expected_return, indicator_return, risk, model_quality)
+        confidence = self._calculate_confidence(df, expected_return, indicator_return, risk, model_quality, model_mae)
 
-        if expected_return > 1.0:
+        if expected_return > 0.8:
             signal = "Up"
-        elif expected_return < -1.0:
+        elif expected_return < -0.8:
             signal = "Down"
         else:
             signal = "Neutral"
@@ -133,7 +140,7 @@ class AnalystAgent:
             "risk": round(float(risk), 2),
             "score": round(float(score), 2),
             "forecast_horizon_days": self.forecast_horizon,
-            "model_type": "regression"
+            "model_type": "xgboost_regression" if self._uses_xgboost() else "tree_regression"
         }
 
     def _indicator_only_prediction(self, df: pd.DataFrame) -> Dict[str, any]:
@@ -178,15 +185,17 @@ class AnalystAgent:
         expected_return: float,
         indicator_return: float,
         risk: float,
-        model_quality: float
+        model_quality: float,
+        model_mae: float,
     ) -> float:
         row = df.iloc[-1]
         adx_weight = min(float(row.get('ADX', 20.0)) / 40.0, 1.0)
         rsi_distance = abs(float(row.get('RSI', 50.0)) - 50.0) / 50.0
         macd_strength = min(abs(float(row.get('MACD_diff', 0.0))) * 10.0, 1.0)
         momentum_strength = min(abs(float(row.get('Momentum_20', 0.0))) * 8.0, 1.0)
-        agreement = 1.0 - min(abs(expected_return - indicator_return) / 12.0, 1.0)
-        model_bonus = min(max(model_quality, 0.0), 1.0) * 0.15
+        agreement = 1.0 - min(abs(expected_return - indicator_return) / 8.0, 1.0)
+        model_bonus = min(max(model_quality, 0.0), 0.6) * 0.10
+        mae_penalty = min(max(model_mae, 0.0) / 20.0, 0.18)
         risk_penalty = min(risk / 15.0, 0.25)
 
         confidence = (
@@ -196,14 +205,36 @@ class AnalystAgent:
             0.20 * momentum_strength +
             0.18 * agreement
         )
-        confidence = confidence + model_bonus - risk_penalty
-        return float(np.clip(confidence, 0.35, 0.92))
+        confidence = confidence + model_bonus - risk_penalty - mae_penalty
+        return float(np.clip(confidence, 0.28, 0.78))
+
+    def _estimate_model_reliability(self, model_quality: float, model_mae: float) -> float:
+        quality_component = min(max(model_quality, 0.0), 0.6) / 0.6 if model_quality > 0 else 0.0
+        mae_component = 1.0 - min(max(model_mae, 0.0) / 12.0, 1.0)
+        return float(np.clip(0.6 * quality_component + 0.4 * mae_component, 0.0, 1.0))
+
+    def _calibrate_expected_return(
+        self,
+        df: pd.DataFrame,
+        proposed_return: float,
+        fallback_direction: float,
+        model_reliability: float,
+    ) -> float:
+        row = df.iloc[-1]
+        realized_vol_pct = max(float(row.get('Volatility_20', 0.02)) * 100.0, 0.8)
+        adx_strength = min(max(float(row.get('ADX', 20.0)) / 30.0, 0.75), 1.2)
+        horizon_scale = np.sqrt(max(self.forecast_horizon, 1) / 10.0)
+        move_cap = float(np.clip(realized_vol_pct * horizon_scale * 1.45 * adx_strength, 1.5, 9.0))
+        damped = float(np.tanh(proposed_return / max(move_cap, 1.0)) * move_cap)
+        reliability_damping = 0.75 + (0.2 * model_reliability)
+        calibrated = damped * reliability_damping
+        return self._sanitize_expected_return(calibrated, fallback_direction)
 
     def _sanitize_expected_return(self, expected_return: float, fallback_direction: float) -> float:
-        adjusted = float(np.clip(expected_return, -15.0, 15.0))
-        if abs(adjusted) < 0.2:
+        adjusted = float(np.clip(expected_return, -9.0, 9.0))
+        if abs(adjusted) < 0.1:
             direction = 1.0 if fallback_direction >= 0 else -1.0
-            adjusted = direction * 0.2
+            adjusted = direction * 0.1
         return adjusted
 
     def _build_empty_prediction(self, error: str) -> Dict[str, any]:
@@ -216,7 +247,7 @@ class AnalystAgent:
             "risk": baseline_risk,
             "score": round(baseline_return / baseline_risk, 2),
             "forecast_horizon_days": self.forecast_horizon,
-            "model_type": "regression",
+            "model_type": "xgboost_regression" if self._uses_xgboost() else "tree_regression",
             "error": error
         }
 
@@ -232,7 +263,7 @@ class AnalystAgent:
                     symbol,
                     forecast_horizon=self.forecast_horizon,
                     market=market,
-                    period="2y"
+                    period="1y"
                 )
                 if not training_df.empty and len(training_df) >= 80:
                     model.train(training_df)
@@ -240,6 +271,9 @@ class AnalystAgent:
                 print(f"[Analyst] Lazy training failed for {symbol}: {str(e)}")
 
         return model_key
+
+    def _uses_xgboost(self) -> bool:
+        return any(getattr(model, "primary_model_name", "") == "xgboost" for model in self.models.values())
 
 if __name__ == "__main__":
     analyst = AnalystAgent(['AAPL', 'TSLA'])

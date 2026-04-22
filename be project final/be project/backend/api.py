@@ -12,6 +12,7 @@ import sys
 import os
 import asyncio
 from datetime import datetime
+import json
 import pandas as pd
 import numpy as np
 
@@ -48,6 +49,7 @@ from backend.recommendation_engine import (
     calculate_volatility_from_data,
     calculate_risk_level,
     calculate_risk_score,
+    calculate_effective_risk,
     calculate_expected_return,
     calculate_recommendation_score,
     get_recommendation_from_score,
@@ -55,6 +57,8 @@ from backend.recommendation_engine import (
     get_trader_action,
     generate_unified_recommendation
 )
+from backend.database import DatabaseManager
+from backend.sentiment_engine import get_stock_news_sentiment
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -74,6 +78,7 @@ app.add_middleware(
 
 # Global ecosystem instance
 ecosystem: Optional[TradingEcosystem] = None
+database_manager = DatabaseManager()
 
 # Indian stock symbol normalization
 INDIAN_SYMBOL_ALIASES = {
@@ -220,6 +225,12 @@ class InvestmentAnalysisRequest(BaseModel):
     investment_period: int
 
 
+class WatchlistItemRequest(BaseModel):
+    symbol: str
+    market: Optional[str] = "IN"
+    notes: Optional[str] = None
+
+
 class EcosystemStatus(BaseModel):
     initialized: bool
     symbols: List[str]
@@ -266,6 +277,58 @@ async def get_status():
         "initial_capital": ecosystem.trader.initial_capital,
         "cycle_count": ecosystem.cycle_count
     }
+
+
+@app.get("/api/database/status")
+async def get_database_status():
+    """Check whether database connectivity is configured and healthy."""
+    return database_manager.connection_status()
+
+
+@app.post("/api/database/setup")
+async def setup_database_schema():
+    """Apply the SQL schema to the configured database."""
+    result = database_manager.apply_schema()
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message"))
+    return result
+
+
+@app.get("/api/analysis-history")
+async def get_analysis_history(limit: int = 20, symbol: Optional[str] = None, market: Optional[str] = None):
+    """Get recent saved investment analyses."""
+    result = database_manager.get_analysis_history(limit=limit, symbol=symbol, market=market)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message"))
+    return result
+
+
+@app.get("/api/watchlist")
+async def get_watchlist(market: str = "IN"):
+    result = database_manager.get_watchlist(market=market)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message"))
+    return result
+
+
+@app.post("/api/watchlist")
+async def add_watchlist_item(request: WatchlistItemRequest):
+    result = database_manager.add_watchlist_item(
+        symbol=request.symbol,
+        market=request.market or "IN",
+        notes=request.notes,
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message"))
+    return result
+
+
+@app.delete("/api/watchlist/{symbol}")
+async def remove_watchlist_item(symbol: str, market: str = "IN"):
+    result = database_manager.remove_watchlist_item(symbol=symbol, market=market)
+    if not result.get("success"):
+        raise HTTPException(status_code=500, detail=result.get("message"))
+    return result
 
 
 @app.post("/api/initialize")
@@ -1153,14 +1216,39 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
                     "error": f"Analysis failed: {str(e2)}"
                 }
         
-        # Calculate predicted price directly from the regression output
+        # Scale the regression output to the requested investment period.
+        # The analyst forecast is generated for its own horizon (default 10 days),
+        # so we compound/decompound that return to match the selected duration.
         signal = prediction.get('signal', 'Neutral')
         confidence = float(prediction.get('confidence', DEFAULT_CONFIDENCE))
         expected_return_pct = float(prediction.get('expected_return', 0.2))
         modeled_risk = float(prediction.get('risk', DEFAULT_RISK_SCORE))
         score = float(prediction.get('score', expected_return_pct / max(modeled_risk, 0.5)))
-        price_change_percent = expected_return_pct / 100.0
-        predicted_price = current_price * (1 + price_change_percent)
+        forecast_horizon_days = max(1, int(prediction.get('forecast_horizon_days', 10) or 10))
+        requested_period_days = max(1, int(investment_period or forecast_horizon_days))
+        base_return_decimal = expected_return_pct / 100.0
+
+        df = None
+        try:
+            df = ecosystem.data_collector.get_latest_data(fetch_symbol)
+            if df is None or df.empty:
+                df = ecosystem.data_collector.fetch_data(fetch_symbol, period="1y", interval="1d", market=market)
+        except Exception as e:
+            print(f"[API] Error getting data for calibration/risk analysis: {str(e)}")
+            df = None
+
+        # Raw compounding can create unrealistic prices for noisy signals, so damp the move
+        # using model confidence and clip it by realized volatility.
+        raw_scaled_return_decimal = (1 + base_return_decimal) ** (requested_period_days / forecast_horizon_days) - 1
+        confidence_damping = 0.45 + (0.55 * confidence)
+        damped_scaled_return_pct = raw_scaled_return_decimal * 100.0 * confidence_damping
+        volatility = calculate_volatility_from_data(df) if df is not None else DEFAULT_VOLATILITY
+        volatility_pct = volatility * 100.0
+        move_cap_pct = float(np.clip(volatility_pct * np.sqrt(requested_period_days) * 2.25, 2.5, 18.0))
+        scaled_expected_return_pct = float(np.clip(damped_scaled_return_pct, -move_cap_pct, move_cap_pct))
+        scaled_return_decimal = scaled_expected_return_pct / 100.0
+        price_change_percent = scaled_return_decimal
+        predicted_price = current_price * (1 + scaled_return_decimal)
         
         # Calculate investment outcome
         shares = investment_amount / current_price
@@ -1175,20 +1263,21 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
         agent_reports['analyst'] = {
             "signal": signal,
             "confidence": confidence,
-            "expected_return": expected_return_pct,
+            "expected_return": scaled_expected_return_pct,
             "risk": modeled_risk,
             "score": score,
-            "reasoning": f"Regression model forecasts {expected_return_pct:.2f}% return over {investment_period} days "
-                        f"with {confidence*100:.1f}% confidence, modeled risk {modeled_risk:.2f}, and score {score:.2f}."
+            "reasoning": f"Regression model forecast is normalized from {forecast_horizon_days} days to {requested_period_days} days, "
+                        f"resulting in {scaled_expected_return_pct:.2f}% expected return with {confidence*100:.1f}% confidence, "
+                        f"modeled risk {modeled_risk:.2f}, and score {score:.2f}."
         }
         
         # Trader Agent Report - Use unified recommendation engine (same logic as Trader Agent)
         # Get trader action using unified engine (matches Trader Agent logic)
         trader_action = (
             "Buy"
-            if expected_return_pct > 0 and modeled_risk <= RISK_SCORE_BUY and score > 0
+            if scaled_expected_return_pct > 0 and modeled_risk <= RISK_SCORE_BUY and score > 0
             else "Avoid"
-            if expected_return_pct < 0
+            if scaled_expected_return_pct < 0
             else "Hold"
         )
         recommended_action = trader_action
@@ -1201,24 +1290,13 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
         }
         
         agent_reports['trader']["reasoning"] = (
-            f"Trader Agent recommends {recommended_action} from expected return {expected_return_pct:.2f}%, "
+            f"Trader Agent recommends {recommended_action} from expected return {scaled_expected_return_pct:.2f}%, "
             f"risk {modeled_risk:.2f}, and score {score:.2f}. "
             f"For investment amount {investment_amount:,.2f}, you could purchase approximately {int(shares)} shares at price {current_price:.2f}."
         )
 
         # Risk Agent Report - Use unified recommendation engine
-        # Get volatility data
-        df = None
-        try:
-            df = ecosystem.data_collector.get_latest_data(fetch_symbol)
-            if df is None or df.empty:
-                df = ecosystem.data_collector.fetch_data(fetch_symbol, period="1mo", interval="1d", market=market)
-        except Exception as e:
-            print(f"[API] Error getting data for risk analysis: {str(e)}")
-            df = None
-        
         # Calculate volatility using unified engine (same logic as Risk Agent)
-        volatility = calculate_volatility_from_data(df) if df is not None else DEFAULT_VOLATILITY
         
         # Get portfolio value for position size calculation
         portfolio_value = 100000  # Default fallback
@@ -1232,8 +1310,11 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
             print(f"[API] Error getting portfolio value for risk analysis: {str(e)}")
             portfolio_value = getattr(ecosystem.trader, 'initial_capital', 100000)
         
-        risk_score = calculate_risk_score(volatility)
-        risk_level, risk_alerts = calculate_risk_level(volatility)
+        risk_score, risk_level, risk_alerts = calculate_effective_risk(
+            volatility,
+            expected_return=scaled_expected_return_pct,
+            confidence=confidence,
+        )
         
         # Risk Agent Report (using unified recommendation)
         agent_reports['risk'] = {
@@ -1243,7 +1324,7 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
             "alerts": risk_alerts,
             "reasoning": (
                 f"Risk Agent assesses {risk_level} risk level for this investment. "
-                f"Volatility is {volatility*100:.2f}%. "
+                f"Volatility is {volatility*100:.2f}% and effective downside-aware risk score is {risk_score:.1f}/10. "
                 + (
                     "Position size would be "
                     f"{(investment_amount / portfolio_value * 100):.1f}% of portfolio."
@@ -1267,7 +1348,7 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
                         f"and risk score of {risk_score:.2f}/10. {auditor_recommendation}"
         }
         
-        return {
+        response_payload = {
             "success": True,
             "report": {
                 "symbol": symbol,
@@ -1280,13 +1361,44 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
                 "predicted_value": predicted_value,
                 "profit_loss": profit_loss,
                 "profit_loss_percent": profit_loss_percent,
-                "prediction": prediction,
-                "expected_return": expected_return_pct,
+                "prediction": {
+                    **prediction,
+                    "expected_return": scaled_expected_return_pct,
+                    "forecast_horizon_days": forecast_horizon_days,
+                    "confidence_damping": round(float(confidence_damping), 3),
+                    "move_cap_pct": round(float(move_cap_pct), 2)
+                },
+                "expected_return": scaled_expected_return_pct,
                 "risk": modeled_risk,
                 "score": score,
+                "calibration": {
+                    "confidence_damping": round(float(confidence_damping), 3),
+                    "move_cap_pct": round(float(move_cap_pct), 2),
+                    "raw_expected_return_pct": round(float(raw_scaled_return_decimal * 100.0), 2)
+                },
                 "agent_reports": agent_reports
             }
         }
+
+        persistence_result = database_manager.save_analysis_run(
+            {
+                "symbol": symbol,
+                "market": market,
+                "investment_amount": investment_amount,
+                "investment_period": investment_period,
+                "current_price": current_price,
+                "predicted_price": predicted_price,
+                "expected_return": scaled_expected_return_pct,
+                "risk": modeled_risk,
+                "confidence": confidence * 100.0,
+                "signal": signal,
+                "recommendation": agent_reports["trader"]["action"],
+                "raw_response": response_payload,
+            }
+        )
+
+        response_payload["persistence"] = persistence_result
+        return response_payload
     except HTTPException:
         # Re-raise HTTP exceptions (like 404, 400) as-is
         raise
@@ -1350,7 +1462,7 @@ async def get_recommendation(symbol: str, market: str = "US"):
             try:
                 import yfinance as yf
                 ticker = yf.Ticker(fetch_symbol)
-                df = ticker.history(period="1mo", interval="1d")
+                df = ticker.history(period="1y", interval="1d")
                 if not df.empty and 'Close' in df.columns:
                     recent_prices = df['Close'].tail(10)
                     if len(recent_prices) > 1:
@@ -1369,13 +1481,15 @@ async def get_recommendation(symbol: str, market: str = "US"):
                 signal = "Neutral"
                 confidence = DEFAULT_CONFIDENCE
         
+        sentiment_payload = get_stock_news_sentiment(base_symbol, fetch_symbol=fetch_symbol)
+
         # Get risk analysis (volatility) - Use unified recommendation engine
         df = None
         if ecosystem is not None:
             try:
                 df = ecosystem.data_collector.get_latest_data(fetch_symbol)
                 if df is None or df.empty:
-                    df = ecosystem.data_collector.fetch_data(fetch_symbol, period="1mo", interval="1d", market=market)
+                    df = ecosystem.data_collector.fetch_data(fetch_symbol, period="1y", interval="1d", market=market)
             except Exception as e:
                 print(f"[API] Error getting data for volatility calculation: {str(e)}")
                 df = None
@@ -1385,7 +1499,7 @@ async def get_recommendation(symbol: str, market: str = "US"):
             try:
                 import yfinance as yf
                 ticker = yf.Ticker(fetch_symbol)
-                df = ticker.history(period="1mo", interval="1d")
+                df = ticker.history(period="1y", interval="1d")
             except Exception as e:
                 print(f"[API] Error fetching data from yfinance: {str(e)}")
                 df = None
@@ -1393,10 +1507,26 @@ async def get_recommendation(symbol: str, market: str = "US"):
         # Calculate volatility using unified engine (same logic as Risk Agent)
         volatility = calculate_volatility_from_data(df) if df is not None else DEFAULT_VOLATILITY
         
-        expected_return = prediction.get('expected_return') if prediction else calculate_expected_return(signal, confidence)
-        modeled_risk = prediction.get('risk') if prediction else calculate_risk_score(volatility)
-        score = prediction.get('score') if prediction else calculate_recommendation_score(expected_return, max(modeled_risk, 0.5))
+        base_expected_return = prediction.get('expected_return') if prediction else calculate_expected_return(signal, confidence)
+        recommendation_summary = generate_unified_recommendation(
+            signal=signal,
+            confidence=confidence,
+            volatility=volatility,
+            sentiment_score=sentiment_payload.get('score', 0.0),
+            sentiment_label=sentiment_payload.get('label', 'Neutral'),
+            base_expected_return=base_expected_return,
+        )
+        expected_return = recommendation_summary.get('expected_return', base_expected_return)
+        modeled_risk = recommendation_summary.get('risk', prediction.get('risk') if prediction else calculate_risk_score(volatility))
+        score = recommendation_summary.get('score', calculate_recommendation_score(expected_return, max(modeled_risk, 0.5)))
         recommendation_data = get_recommendation_from_score(score, confidence, expected_return, modeled_risk)
+        if recommendation_summary.get('sentiment_impact'):
+            recommendation_data['reason'] = (
+                f"{recommendation_data['reason']} "
+                f"News sentiment is {recommendation_summary['sentiment_label'].lower()} "
+                f"({recommendation_summary['sentiment_score']:+.2f}) and adjusted the modeled return by "
+                f"{recommendation_summary['sentiment_impact']:+.2f}%."
+            )
         
         return {
             "success": True,
@@ -1406,9 +1536,19 @@ async def get_recommendation(symbol: str, market: str = "US"):
             "color": recommendation_data["color"],
             "score": round(float(score), 2),
             "expected_return": round(float(expected_return), 2),
+            "base_expected_return": round(float(base_expected_return), 2),
             "risk": round(float(modeled_risk), 1),
             "confidence": round(float(confidence * 100), 1),
-            "signal": signal
+            "signal": signal,
+            "sentiment": {
+                "label": recommendation_summary.get("sentiment_label", "Neutral"),
+                "score": recommendation_summary.get("sentiment_score", 0.0),
+                "impact": recommendation_summary.get("sentiment_impact", 0.0),
+                "headline": (sentiment_payload.get("headlines") or [{}])[0].get("title"),
+                "article_count": sentiment_payload.get("article_count", 0),
+                "last_updated": sentiment_payload.get("last_updated"),
+            },
+            "risk_alerts": recommendation_summary.get("risk_alerts", []),
         }
     except HTTPException:
         raise
@@ -1425,9 +1565,44 @@ async def get_recommendation(symbol: str, market: str = "US"):
             "color": "yellow",
             "score": 0.0,
             "expected_return": DEFAULT_EXPECTED_RETURN,
+            "base_expected_return": DEFAULT_EXPECTED_RETURN,
             "risk": DEFAULT_RISK_SCORE,
             "confidence": DEFAULT_CONFIDENCE * 100,
-            "signal": "Neutral"
+            "signal": "Neutral",
+            "sentiment": {
+                "label": "Neutral",
+                "score": 0.0,
+                "impact": 0.0,
+                "headline": None,
+                "article_count": 0,
+                "last_updated": None,
+            },
+            "risk_alerts": [],
+        }
+
+
+@app.get("/api/news-sentiment/{symbol}")
+async def get_news_sentiment(symbol: str, market: str = "US", refresh: bool = False):
+    """Return live-ish stock headlines with aggregated sentiment."""
+    try:
+        symbol = symbol.upper()
+        base_symbol, market, fetch_symbol = normalize_symbol(symbol, market_hint=market)
+        payload = get_stock_news_sentiment(base_symbol, fetch_symbol=fetch_symbol, force_refresh=refresh)
+        payload["market"] = market
+        return payload
+    except Exception as e:
+        print(f"[API] Error getting news sentiment for {symbol}: {str(e)}")
+        return {
+            "success": True,
+            "symbol": symbol.upper(),
+            "market": market,
+            "score": 0.0,
+            "label": "Neutral",
+            "article_count": 0,
+            "headlines": [],
+            "message": "News sentiment is temporarily unavailable. Falling back to neutral sentiment.",
+            "cached": False,
+            "last_updated": datetime.utcnow().isoformat(),
         }
 
 
