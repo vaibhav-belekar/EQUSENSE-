@@ -210,6 +210,56 @@ def ensure_market_ecosystem(symbols: List[str], market: str = "US", initial_capi
     return ecosystem
 
 
+def derive_market_trend_signal(df: Optional[pd.DataFrame], fallback_signal: str, fallback_confidence: float):
+    """Use recent multi-day price trend as a tiebreaker when the model stays neutral."""
+    signal = fallback_signal or "Neutral"
+    confidence = float(fallback_confidence or DEFAULT_CONFIDENCE)
+
+    if df is None or df.empty or 'Close' not in df.columns:
+        return signal, confidence
+
+    closes = df['Close'].dropna()
+    if len(closes) < 3:
+        return signal, confidence
+
+    last_close = float(closes.iloc[-1])
+    move_3 = ((last_close / float(closes.iloc[-4])) - 1.0) if len(closes) >= 4 and float(closes.iloc[-4]) > 0 else 0.0
+    move_5 = ((last_close / float(closes.iloc[-6])) - 1.0) if len(closes) >= 6 and float(closes.iloc[-6]) > 0 else 0.0
+    move_20 = ((last_close / float(closes.iloc[-21])) - 1.0) if len(closes) >= 21 and float(closes.iloc[-21]) > 0 else 0.0
+    trend_score = (move_3 * 0.45) + (move_5 * 0.35) + (move_20 * 0.20)
+
+    if signal == "Neutral":
+        if trend_score >= 0.01:
+            return "Up", min(0.86, max(confidence, 0.5 + abs(trend_score) * 8.0))
+        if trend_score <= -0.01:
+            return "Down", min(0.86, max(confidence, 0.5 + abs(trend_score) * 8.0))
+    elif signal == "Up" and trend_score > 0:
+        return signal, min(0.9, max(confidence, 0.55 + abs(trend_score) * 6.0))
+    elif signal == "Down" and trend_score < 0:
+        return signal, min(0.9, max(confidence, 0.55 + abs(trend_score) * 6.0))
+
+    return signal, confidence
+
+
+def get_position_shares(symbol: str, fetch_symbol: str = None, base_symbol: str = None) -> float:
+    """Return currently held shares for any recognized symbol variant."""
+    global ecosystem
+    if ecosystem is None:
+        return 0.0
+
+    try:
+        portfolio = ecosystem.trader.get_portfolio()
+    except Exception:
+        return 0.0
+
+    return float(
+        portfolio.get((symbol or "").upper(), 0) or
+        portfolio.get(fetch_symbol, 0) or
+        portfolio.get(base_symbol, 0) or
+        0
+    )
+
+
 # Pydantic models for request/response
 class SymbolsRequest(BaseModel):
     symbols: List[str]
@@ -1288,16 +1338,22 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
         
         # Trader Agent Report - Use unified recommendation engine (same logic as Trader Agent)
         # Get trader action using unified engine (matches Trader Agent logic)
+        position_shares = get_position_shares(symbol, fetch_symbol, base_symbol)
+        has_position = position_shares > 0
+
         model_decision = get_model_aligned_recommendation(
             signal=signal,
             confidence=confidence,
             expected_return=scaled_expected_return_pct,
             risk=modeled_risk,
             score=score,
+            has_position=has_position,
         )
         trader_action = (
             "Buy"
             if model_decision["recommendation"] == "BUY"
+            else "Sell"
+            if model_decision["recommendation"] == "SELL"
             else "Avoid"
             if model_decision["recommendation"] == "AVOID"
             else "Hold"
@@ -1400,6 +1456,8 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
                 "recommendation": model_decision["recommendation"],
                 "recommendation_reason": model_decision["reason"],
                 "model_action": recommended_action,
+                "has_position": has_position,
+                "position_shares": position_shares,
                 "calibration": {
                     "confidence_damping": round(float(confidence_damping), 3),
                     "move_cap_pct": round(float(move_cap_pct), 2),
@@ -1422,6 +1480,8 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
                 "confidence": confidence * 100.0,
                 "signal": signal,
                 "recommendation": agent_reports["trader"]["action"],
+                "has_position": has_position,
+                "position_shares": position_shares,
                 "raw_response": response_payload,
             }
         )
@@ -1446,7 +1506,7 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
 
 @app.get("/api/recommend/{symbol}")
 async def get_recommendation(symbol: str, market: str = "US"):
-    """Get BUY/HOLD/AVOID recommendation for a stock based on prediction and risk analysis"""
+    """Get BUY/HOLD/SELL recommendation for a stock based on prediction and risk analysis"""
     global ecosystem
     
     try:
@@ -1533,6 +1593,10 @@ async def get_recommendation(symbol: str, market: str = "US"):
                 print(f"[API] Error fetching data from yfinance: {str(e)}")
                 df = None
         
+        signal, confidence = derive_market_trend_signal(df, signal, confidence)
+        position_shares = get_position_shares(symbol, fetch_symbol, base_symbol)
+        has_position = position_shares > 0
+
         # Calculate volatility using unified engine (same logic as Risk Agent)
         volatility = calculate_volatility_from_data(df) if df is not None else DEFAULT_VOLATILITY
         
@@ -1554,6 +1618,7 @@ async def get_recommendation(symbol: str, market: str = "US"):
             expected_return=expected_return,
             risk=modeled_risk,
             score=score,
+            has_position=has_position,
         )
         if recommendation_summary.get('sentiment_impact'):
             recommendation_data['reason'] = (
@@ -1575,6 +1640,9 @@ async def get_recommendation(symbol: str, market: str = "US"):
             "risk": round(float(modeled_risk), 1),
             "confidence": round(float(confidence * 100), 1),
             "signal": signal,
+            "has_position": has_position,
+            "position_shares": round(float(position_shares), 4),
+            "alternate_action": recommendation_data.get("alternate_action"),
             "sentiment": {
                 "label": recommendation_summary.get("sentiment_label", "Neutral"),
                 "score": recommendation_summary.get("sentiment_score", 0.0),

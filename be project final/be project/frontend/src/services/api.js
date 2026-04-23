@@ -267,7 +267,7 @@ export const getRealtimePrice = async (symbol, market = 'US') => {
   }
 }
 
-// Get stock recommendation (BUY/HOLD/AVOID)
+// Get stock recommendation (BUY/HOLD/SELL)
 export const getRecommendation = async (symbol, market = 'US') => {
   try {
     const response = await api.get(`/api/recommend/${symbol}`, {

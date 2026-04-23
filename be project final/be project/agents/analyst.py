@@ -125,13 +125,7 @@ class AnalystAgent:
         risk = self._estimate_risk(df)
         score = expected_return / max(risk, 0.5)
         confidence = self._calculate_confidence(df, expected_return, indicator_return, risk, model_quality, model_mae)
-
-        if expected_return > 0.8:
-            signal = "Up"
-        elif expected_return < -0.8:
-            signal = "Down"
-        else:
-            signal = "Neutral"
+        signal = self._infer_signal(df, expected_return, confidence)
 
         return {
             "signal": signal,
@@ -207,6 +201,39 @@ class AnalystAgent:
         )
         confidence = confidence + model_bonus - risk_penalty - mae_penalty
         return float(np.clip(confidence, 0.28, 0.78))
+
+    def _infer_signal(self, df: pd.DataFrame, expected_return: float, confidence: float) -> str:
+        if df is None or df.empty or 'Close' not in df.columns:
+            if expected_return >= 0.45:
+                return "Up"
+            if expected_return <= -0.45:
+                return "Down"
+            return "Neutral"
+
+        closes = df['Close'].dropna()
+        if len(closes) < 3:
+            if expected_return >= 0.45:
+                return "Up"
+            if expected_return <= -0.45:
+                return "Down"
+            return "Neutral"
+
+        last_close = float(closes.iloc[-1])
+        move_5 = ((last_close / float(closes.iloc[-6])) - 1.0) if len(closes) >= 6 and float(closes.iloc[-6]) > 0 else 0.0
+        move_20 = ((last_close / float(closes.iloc[-21])) - 1.0) if len(closes) >= 21 and float(closes.iloc[-21]) > 0 else 0.0
+        momentum_score = (move_5 * 0.65) + (move_20 * 0.35)
+
+        if expected_return >= 0.45:
+            return "Up"
+        if expected_return <= -0.45:
+            return "Down"
+
+        if momentum_score >= 0.012 and confidence >= 0.42:
+            return "Up"
+        if momentum_score <= -0.012 and confidence >= 0.42:
+            return "Down"
+
+        return "Neutral"
 
     def _estimate_model_reliability(self, model_quality: float, model_mae: float) -> float:
         quality_component = min(max(model_quality, 0.0), 0.6) / 0.6 if model_quality > 0 else 0.0

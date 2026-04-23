@@ -22,6 +22,7 @@ import {
   getCompanyInfo,
   getOHLCData,
   getRecommendation,
+  getPortfolio,
   addWatchlistItem,
   BACKEND_DISPLAY_URL
 } from '../services/api'
@@ -38,25 +39,32 @@ import AIPrediction from './AIPrediction'
 import TradingCall from './TradingCall'
 import StockComparison from './StockComparison'
 
-const buildDecisionFromModel = (signal, expectedReturn, risk, confidence = 0.5, score = null) => {
+const buildDecisionFromModel = (signal, expectedReturn, risk, confidence = 0.5, score = null, hasPosition = false) => {
   const normalizedSignal = String(signal || 'Neutral').trim()
   const computedScore = Number(score ?? (expectedReturn / Math.max(risk, 0.5)))
+  const bullishSetup = normalizedSignal === 'Up'
+  const bearishSetup = normalizedSignal === 'Down'
 
-  if (normalizedSignal === 'Up' && expectedReturn >= 0.6 && confidence >= 0.42 && risk <= 8.5) {
+  if (bullishSetup) {
     return {
       recommendation: 'BUY',
       color: 'green',
       action: 'Buy',
-      reason: `ML trend model is bullish with ${Math.round(confidence * 100)}% confidence and ${expectedReturn.toFixed(2)}% expected return.`
+      reason: `ML trend model is bullish with ${Math.round(confidence * 100)}% confidence, so up-trending stocks are treated as BUY instead of HOLD.`
     }
   }
 
-  if (normalizedSignal === 'Down' && expectedReturn <= -0.4) {
+  if (bearishSetup) {
+    const alternateAction = 'Avoid fresh entry; if already holding, consider SELL/EXIT.'
+
     return {
-      recommendation: 'AVOID',
+      recommendation: hasPosition ? 'SELL' : 'AVOID',
       color: 'red',
-      action: 'Avoid',
-      reason: `ML trend model is bearish with ${Math.round(confidence * 100)}% confidence and ${expectedReturn.toFixed(2)}% expected return.`
+      action: hasPosition ? 'Sell' : 'Avoid',
+      reason: hasPosition
+        ? `ML trend model is bearish with ${Math.round(confidence * 100)}% confidence. ${alternateAction}`
+        : `ML trend model is bearish with ${Math.round(confidence * 100)}% confidence. ${alternateAction}`,
+      alternateAction
     }
   }
 
@@ -88,6 +96,7 @@ const StockScreener = () => {
   const [companyInfo, setCompanyInfo] = useState(null)
   const [predictionMetrics, setPredictionMetrics] = useState(null)
   const [recommendation, setRecommendation] = useState(null)
+  const [portfolio, setPortfolio] = useState(null)
   const [showComparisonModal, setShowComparisonModal] = useState(false)
   const [comparisonStocks, setComparisonStocks] = useState([])
   const activeSearchRequestRef = useRef(0)
@@ -201,6 +210,29 @@ const StockScreener = () => {
     loadAvailableStocks()
   }, [market])
 
+  const refreshPortfolio = async () => {
+    try {
+      const portfolioData = await getPortfolio()
+      if (portfolioData?.success) {
+        setPortfolio(portfolioData)
+        return portfolioData
+      }
+    } catch (error) {
+      console.log('[StockScreener] Portfolio fetch unavailable:', error?.message || error)
+    }
+    return null
+  }
+
+  const hasOpenPosition = (symbol, portfolioData = portfolio) => {
+    const normalized = String(symbol || '').replace(/\.(NS|BO)$/i, '').toUpperCase()
+    const holdings = portfolioData?.holdings || []
+
+    return holdings.some((holding) => {
+      const holdingSymbol = String(holding?.symbol || '').replace(/\.(NS|BO)$/i, '').toUpperCase()
+      return holdingSymbol === normalized && Number(holding?.shares || 0) > 0
+    })
+  }
+
   const resolveSearchSymbol = (rawTerm) => {
     const normalized = rawTerm.trim().toUpperCase()
     if (!normalized) {
@@ -229,13 +261,88 @@ const StockScreener = () => {
     return { symbol: normalized }
   }
 
-  const buildPredictionFromSignal = (predictionData) => ({
-    signal: predictionData?.signal || 'Neutral',
-    confidence: predictionData?.confidence || 0.5,
-    expected_return: predictionData?.expected_return ?? 0.2,
-    risk: predictionData?.risk ?? 5.0,
-    score: predictionData?.score ?? ((predictionData?.expected_return ?? 0.2) / Math.max(predictionData?.risk ?? 5.0, 0.5))
-  })
+  const buildPredictionFromSignal = (predictionData) => {
+    const rawConfidence = Number(predictionData?.confidence ?? 0.5)
+    const normalizedConfidence = rawConfidence > 1 ? rawConfidence / 100 : rawConfidence
+
+    return {
+      signal: predictionData?.signal || 'Neutral',
+      confidence: normalizedConfidence,
+      expected_return: predictionData?.expected_return ?? 0.2,
+      risk: predictionData?.risk ?? 5.0,
+      score: predictionData?.score ?? ((predictionData?.expected_return ?? 0.2) / Math.max(predictionData?.risk ?? 5.0, 0.5)),
+      has_position: Boolean(predictionData?.has_position)
+    }
+  }
+
+  const normalizeRecommendationPayload = (payload, fallbackPrediction = null, symbol = '') => {
+    if (!payload) return payload
+
+    const signal = payload.signal || fallbackPrediction?.signal || 'Neutral'
+    const confidence = Number(
+      payload.confidence != null
+        ? Number(payload.confidence) / 100
+        : fallbackPrediction?.confidence ?? 0.5
+    )
+    const expectedReturn = Number(
+      payload.expected_return ??
+      fallbackPrediction?.expected_return ??
+      0.2
+    )
+    const risk = Number(
+      payload.risk ??
+      fallbackPrediction?.risk ??
+      5.0
+    )
+    const score = Number(
+      payload.score ??
+      (expectedReturn / Math.max(risk, 0.5))
+    )
+    const hasPosition = payload.has_position != null ? payload.has_position : hasOpenPosition(symbol)
+
+    const decision = buildDecisionFromModel(signal, expectedReturn, risk, confidence, score, hasPosition)
+    const currentRecommendation = String(payload.recommendation || '').toUpperCase()
+
+    if (currentRecommendation === decision.recommendation) {
+      return {
+        ...payload,
+        signal,
+        has_position: hasPosition,
+        alternate_action: payload.alternate_action || decision.alternateAction || null,
+        confidence: Number((confidence * 100).toFixed(1)),
+        expected_return: expectedReturn,
+        risk,
+        score
+      }
+    }
+
+    if (decision.recommendation !== 'HOLD') {
+        return {
+          ...payload,
+          recommendation: decision.recommendation,
+          reason: decision.reason,
+          color: decision.color,
+          signal,
+          has_position: hasPosition,
+          alternate_action: payload.alternate_action || decision.alternateAction || null,
+          confidence: Number((confidence * 100).toFixed(1)),
+          expected_return: expectedReturn,
+          risk,
+        score
+      }
+    }
+
+    return {
+      ...payload,
+      signal,
+      has_position: hasPosition,
+      alternate_action: payload.alternate_action || decision.alternateAction || null,
+      confidence: Number((confidence * 100).toFixed(1)),
+      expected_return: expectedReturn,
+      risk,
+      score
+    }
+  }
 
   const buildLocalAnalysisResult = (symbol) => {
     const currentPrice = selectedStockData?.symbol === symbol
@@ -251,7 +358,14 @@ const StockScreener = () => {
     const score = recommendation?.score ?? (expectedReturn / Math.max(riskScore, 0.5))
     const signal = selectedStockData?.prediction?.signal || recommendation?.signal || 'Neutral'
     const confidence = selectedStockData?.prediction?.confidence ?? ((recommendation?.confidence ?? 50) / 100)
-    const decision = buildDecisionFromModel(signal, expectedReturn, riskScore, confidence, score)
+    const decision = buildDecisionFromModel(
+      signal,
+      expectedReturn,
+      riskScore,
+      confidence,
+      score,
+      hasOpenPosition(symbol)
+    )
 
     const investmentAmountValue = parseFloat(investmentAmount)
     const investmentPeriodValue = Math.max(1, parseInt(investmentPeriod))
@@ -265,9 +379,11 @@ const StockScreener = () => {
 
     const auditorRecommendation = decision.recommendation === 'BUY'
       ? `BUY: ML trend model supports an upward move with expected return ${expectedReturn.toFixed(2)}%.`
-      : decision.recommendation === 'AVOID'
-        ? `AVOID: ML trend model indicates downside risk with expected return ${expectedReturn.toFixed(2)}%.`
-        : `HOLD: ML trend model is neutral or not strong enough for a buy yet.`
+      : decision.recommendation === 'SELL'
+        ? `SELL: ML trend model indicates downside risk with expected return ${expectedReturn.toFixed(2)}%.`
+        : decision.recommendation === 'AVOID'
+          ? `AVOID: ML trend model indicates downside risk, so fresh entries should be avoided.`
+          : `HOLD: ML trend model is neutral or not strong enough for a buy yet.`
 
     return {
       success: true,
@@ -296,6 +412,7 @@ const StockScreener = () => {
         recommendation: decision.recommendation,
         recommendation_reason: decision.reason,
         model_action: decision.action,
+        has_position: hasOpenPosition(symbol),
         agent_reports: {
           analyst: {
             signal,
@@ -351,6 +468,8 @@ const StockScreener = () => {
 
     setSearching(true)
     try {
+      await refreshPortfolio()
+
       // Fetch real-time price
       const [priceResult, ohlcResult, recommendationResult] = await Promise.allSettled([
         getRealtimePrice(symbol, market),
@@ -376,15 +495,18 @@ const StockScreener = () => {
             const recentPrice = prices[prices.length - 1]
             const previousPrice = prices[prices.length - 2]
             const change = (recentPrice - previousPrice) / previousPrice
+            const change5 = prices.length >= 6 ? (recentPrice - prices[prices.length - 6]) / prices[prices.length - 6] : change
+            const change20 = prices.length >= 21 ? (recentPrice - prices[prices.length - 21]) / prices[prices.length - 21] : change5
+            const trendScore = (change * 0.45) + (change5 * 0.35) + (change20 * 0.20)
             
             if (!price) {
               price = recentPrice
             }
             
-            if (change > 0.02) {
-              prediction = { signal: 'Up', confidence: Math.min(0.85, 0.6 + Math.abs(change) * 8) }
-            } else if (change < -0.02) {
-              prediction = { signal: 'Down', confidence: Math.min(0.85, 0.6 + Math.abs(change) * 8) }
+            if (trendScore >= 0.01) {
+              prediction = { signal: 'Up', confidence: Math.min(0.86, 0.52 + Math.abs(trendScore) * 10) }
+            } else if (trendScore <= -0.01) {
+              prediction = { signal: 'Down', confidence: Math.min(0.86, 0.52 + Math.abs(trendScore) * 10) }
             } else {
               prediction = { signal: 'Neutral', confidence: 0.55 }
             }
@@ -399,8 +521,9 @@ const StockScreener = () => {
         if (recommendationResult.status === 'fulfilled') {
           const recommendationPayload = recommendationResult.value
           if (recommendationPayload && recommendationPayload.success) {
-            prediction = buildPredictionFromSignal(recommendationPayload)
-            setRecommendation(recommendationPayload)
+            const normalizedRecommendation = normalizeRecommendationPayload(recommendationPayload, null, symbol)
+            prediction = buildPredictionFromSignal(normalizedRecommendation)
+            setRecommendation(normalizedRecommendation)
           }
         } else {
           console.log('[StockScreener] Recommendation API failed, keeping fallback prediction')
@@ -457,7 +580,9 @@ const StockScreener = () => {
       }
 
       // Fetch recommendation from backend (uses unified recommendation engine)
-      let recommendationData = recommendationResult.status === 'fulfilled' ? recommendationResult.value : recommendation
+      let recommendationData = recommendationResult.status === 'fulfilled'
+        ? normalizeRecommendationPayload(recommendationResult.value, prediction, symbol)
+        : recommendation
       let calculatedExpectedReturn = prediction.expected_return ?? 0
       let calculatedRisk = prediction.risk ?? 5.0
       
@@ -648,6 +773,8 @@ const StockScreener = () => {
         return
       }
 
+      const latestPortfolio = await refreshPortfolio()
+
       // Wait a moment for initialization to complete
       await new Promise(resolve => setTimeout(resolve, 1000))
 
@@ -693,10 +820,11 @@ const StockScreener = () => {
             expectedReturn,
             riskScore,
             report.prediction?.confidence || 0.5,
-            report.score ?? sharpeRatio
+            report.score ?? sharpeRatio,
+            report.has_position ?? hasOpenPosition(symbol, latestPortfolio || portfolio)
           )
 
-          setRecommendation({
+          setRecommendation(normalizeRecommendationPayload({
             success: true,
             symbol,
             recommendation: report.recommendation || decision.recommendation,
@@ -706,8 +834,10 @@ const StockScreener = () => {
             expected_return: expectedReturn,
             risk: riskScore,
             confidence: (report.prediction?.confidence || 0.5) * 100,
-            signal: report.prediction?.signal || 'Neutral'
-          })
+            signal: report.prediction?.signal || 'Neutral',
+            has_position: report.has_position ?? hasOpenPosition(symbol, latestPortfolio || portfolio),
+            alternate_action: report.alternate_action || decision.alternateAction || null
+          }, report.prediction, symbol))
         }
         
         toast.success('Analysis completed!')
@@ -813,8 +943,10 @@ const StockScreener = () => {
 
     const action = recommendation?.recommendation === 'BUY'
       ? 'Buy'
-      : recommendation?.recommendation === 'AVOID'
-        ? 'Avoid'
+      : recommendation?.recommendation === 'SELL'
+        ? 'Sell'
+        : recommendation?.recommendation === 'AVOID'
+          ? 'Avoid'
         : 'Hold'
 
     const existingTrades = JSON.parse(localStorage.getItem('paperTrades') || '[]')

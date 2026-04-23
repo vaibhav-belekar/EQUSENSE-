@@ -2,6 +2,42 @@ import React from 'react'
 import { motion } from 'framer-motion'
 import { Target, Plus, LineChart } from 'lucide-react'
 
+const normalizeRecommendation = (value) => {
+  const normalized = String(value || '').trim().toUpperCase()
+  if (normalized === 'BUY') return 'BUY'
+  if (normalized === 'SELL') return 'SELL'
+  if (normalized === 'AVOID') return 'AVOID'
+  if (normalized === 'HOLD') return 'HOLD'
+  return ''
+}
+
+const deriveTradingCall = (recommendation, prediction, predictionMetrics) => {
+  const recommendedAction = normalizeRecommendation(recommendation?.recommendation || recommendation)
+  const recommendationSignal = String(recommendation?.signal || '').trim()
+  const hasPosition = Boolean(recommendation?.has_position)
+
+  if (recommendedAction === 'SELL' || recommendedAction === 'BUY' || recommendedAction === 'AVOID') {
+    return recommendedAction
+  }
+
+  if (recommendedAction === 'HOLD' && recommendationSignal === 'Up') {
+    return 'BUY'
+  }
+
+  if (recommendedAction === 'HOLD' && recommendationSignal === 'Down') {
+    return hasPosition ? 'SELL' : 'AVOID'
+  }
+
+  const signal = prediction?.signal || 'Neutral'
+  if (signal === 'Up') {
+    return 'BUY'
+  }
+  if (signal === 'Down') {
+    return hasPosition ? 'SELL' : 'AVOID'
+  }
+  return 'HOLD'
+}
+
 const TradingCall = ({
   symbol,
   currentPrice,
@@ -20,13 +56,14 @@ const TradingCall = ({
   const confidence = prediction.confidence || 0.5
   const expectedReturn = Number(predictionMetrics?.expectedReturn || 0)
   const risk = Number(predictionMetrics?.risk || 5.0)
-  const recommendationLabel = recommendation?.recommendation || 'HOLD'
-
-  const tradingCall = recommendationLabel === 'BUY' ? 'BUY' : recommendationLabel === 'AVOID' ? 'AVOID' : 'HOLD'
-  const callBgColor = tradingCall === 'BUY' ? 'bg-green-50' : tradingCall === 'AVOID' ? 'bg-red-50' : 'bg-yellow-50'
-  const callBorderColor = tradingCall === 'BUY' ? 'border-green-300' : tradingCall === 'AVOID' ? 'border-red-300' : 'border-yellow-300'
-  const callTextColor = tradingCall === 'BUY' ? 'text-green-800' : tradingCall === 'AVOID' ? 'text-red-800' : 'text-yellow-800'
-  const hasTradePlan = tradingCall === 'BUY'
+  const tradingCall = deriveTradingCall(recommendation, prediction, predictionMetrics)
+  const alternateAction = signal === 'Down'
+    ? 'Avoid fresh entry; if already holding, consider SELL/EXIT.'
+    : recommendation?.alternate_action
+  const callBgColor = tradingCall === 'BUY' ? 'bg-green-50' : tradingCall === 'SELL' || tradingCall === 'AVOID' ? 'bg-red-50' : 'bg-yellow-50'
+  const callBorderColor = tradingCall === 'BUY' ? 'border-green-300' : tradingCall === 'SELL' || tradingCall === 'AVOID' ? 'border-red-300' : 'border-yellow-300'
+  const callTextColor = tradingCall === 'BUY' ? 'text-green-800' : tradingCall === 'SELL' || tradingCall === 'AVOID' ? 'text-red-800' : 'text-yellow-800'
+  const hasTradePlan = tradingCall === 'BUY' || tradingCall === 'SELL'
 
   let entryPrice = currentPrice
   let stopLoss = currentPrice
@@ -45,15 +82,29 @@ const TradingCall = ({
     if (riskAmount > 0) {
       riskReward = `1:${(rewardAmount / riskAmount).toFixed(1)}`
     }
-  } else if (tradingCall === 'AVOID') {
-    riskReward = 'No trade'
+  } else if (tradingCall === 'SELL') {
+    const stopLossPercent = Math.min(Math.max(risk / 150, 0.012), 0.03)
+    const targetPercent = Math.min(Math.max(Math.abs(expectedReturn) / 100, 0.02), 0.06)
+
+    stopLoss = currentPrice * (1 + stopLossPercent)
+    targetPrice = currentPrice * (1 - targetPercent)
+
+    const riskAmount = stopLoss - entryPrice
+    const rewardAmount = entryPrice - targetPrice
+    if (riskAmount > 0) {
+      riskReward = `1:${(rewardAmount / riskAmount).toFixed(1)}`
+    }
   } else {
     riskReward = 'Wait'
   }
 
-  const timeframe = tradingCall === 'AVOID'
-    ? 'Wait for Better Setup'
-    : tradingCall === 'HOLD'
+  const timeframe = tradingCall === 'SELL'
+    ? Math.abs(expectedReturn) > 3
+      ? 'Short Term (5-10 Days)'
+      : 'Swing Window (1-2 Weeks)'
+    : tradingCall === 'AVOID'
+      ? 'Wait for Better Setup'
+      : tradingCall === 'HOLD'
       ? 'Medium Term (1-4 Weeks)'
       : Math.abs(expectedReturn) > 3
         ? 'Short Term (5-10 Days)'
@@ -78,13 +129,16 @@ const TradingCall = ({
   if (risk > 7) rationale.push('High volatility detected, so position sizing should stay conservative.')
   else if (risk < 3) rationale.push('Volatility is relatively contained at current levels.')
 
-  if (tradingCall === 'AVOID') rationale.push('No fresh long entry is recommended until the setup improves.')
+  if (tradingCall === 'SELL') rationale.push('Downtrend is strong enough to justify a sell call at current levels.')
+  else if (tradingCall === 'AVOID') rationale.push('Avoid fresh entry while the setup remains bearish.')
   else if (tradingCall === 'HOLD') rationale.push('Waiting for cleaner confirmation is safer than forcing an entry here.')
 
   const currencySymbol = market === 'IN' ? '₹' : '$'
   const formatPrice = (price) => `${currencySymbol}${Number(price).toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
-  const planStatusText = tradingCall === 'AVOID'
-    ? 'Avoid fresh long entries for now.'
+  const planStatusText = tradingCall === 'SELL'
+    ? 'Bearish setup active. Sell or exit on weakness.'
+    : tradingCall === 'AVOID'
+      ? 'Bearish setup active. Avoid fresh entry for now.'
     : tradingCall === 'HOLD'
       ? 'Wait for a cleaner confirmation before entering.'
       : riskReward
@@ -151,6 +205,12 @@ const TradingCall = ({
       </div>
 
       <div className="border-t border-gray-300 my-4"></div>
+
+      {alternateAction && (
+        <div className="mb-4 rounded-lg bg-white/70 border border-red-200 p-3 text-sm font-semibold text-red-800">
+          {alternateAction}
+        </div>
+      )}
 
       <div>
         <p className="text-sm font-bold text-gray-900 mb-2">Rationale:</p>

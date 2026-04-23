@@ -165,12 +165,13 @@ def calculate_expected_return(signal: str, confidence: float) -> float:
     """
     Derive a continuous return estimate from direction and confidence.
     """
+    confidence = float(np.clip(confidence, 0.0, 1.0))
     if signal == 'Up':
-        expected_return = 2.0 + (confidence * 10.0)
+        expected_return = 0.8 + (confidence * 6.2)
     elif signal == 'Down':
-        expected_return = -2.0 - (confidence * 10.0)
+        expected_return = -0.8 - (confidence * 6.2)
     else:
-        expected_return = (confidence - 0.5) * 4.0
+        expected_return = (confidence - 0.5) * 2.4
 
     if abs(expected_return) < 0.2:
         expected_return = 0.2 if expected_return >= 0 else -0.2
@@ -181,7 +182,7 @@ def calculate_expected_return(signal: str, confidence: float) -> float:
 def dampen_sentiment_impact(score: float, signal: str) -> float:
     """
     Keep news sentiment useful without letting a mildly negative headline
-    flip most neutral setups into an AVOID call.
+    flip most neutral setups into a SELL call.
     """
     multiplier = 0.35 if signal == 'Neutral' else 0.5
     return float(np.clip(score * multiplier, -0.6, 0.6))
@@ -201,15 +202,15 @@ def get_recommendation_from_score(score: float, confidence: float, expected_retu
     """
     risk_level = get_risk_level_from_score(risk)
 
-    if expected_return >= 1.0 and risk <= RISK_SCORE_BUY and score > 0:
+    if expected_return >= 0.75 and confidence >= CONFIDENCE_BUY_THRESHOLD and risk <= 9.0 and score >= 0.12:
         recommendation = "BUY"
         color = "green"
         reason = (
             f"Profit outlook is positive ({expected_return:.2f}%) with acceptable risk "
             f"({risk:.2f}/10) and a supportive return/risk score ({score:.2f})."
         )
-    elif expected_return <= -1.0:
-        recommendation = "AVOID"
+    elif expected_return <= -0.75 and confidence >= CONFIDENCE_SELL_THRESHOLD and score <= -0.12:
+        recommendation = "SELL"
         color = "red"
         reason = (
             f"Modeled return is negative ({expected_return:.2f}%) after accounting for "
@@ -240,6 +241,7 @@ def get_model_aligned_recommendation(
     expected_return: float,
     risk: float,
     score: Optional[float] = None,
+    has_position: bool = False,
 ) -> Dict:
     """
     Keep the final recommendation aligned with the analyst model's trend signal.
@@ -247,19 +249,22 @@ def get_model_aligned_recommendation(
     normalized_signal = (signal or "Neutral").strip().title()
     computed_score = float(score if score is not None else calculate_recommendation_score(expected_return, risk))
 
-    if normalized_signal == "Up" and expected_return >= 0.6 and confidence >= 0.42 and risk <= 8.5:
+    bullish_setup = normalized_signal == "Up"
+    bearish_setup = normalized_signal == "Down"
+
+    if bullish_setup:
         recommendation = "BUY"
         color = "green"
         reason = (
             f"ML trend model is bullish ({normalized_signal}) with {confidence*100:.1f}% confidence. "
             f"Modeled return is {expected_return:.2f}% with risk {risk:.2f}/10, so the setup supports a buy."
         )
-    elif normalized_signal == "Down" and expected_return <= -0.4:
-        recommendation = "AVOID"
+    elif bearish_setup:
+        recommendation = "SELL" if has_position else "AVOID"
         color = "red"
         reason = (
             f"ML trend model is bearish ({normalized_signal}) with {confidence*100:.1f}% confidence. "
-            f"Modeled return is {expected_return:.2f}%, so fresh entries should be avoided and existing positions reviewed."
+            f"Modeled return is {expected_return:.2f}%. Avoid fresh entry; if already holding, consider SELL/EXIT."
         )
     else:
         recommendation = "HOLD"
@@ -278,6 +283,7 @@ def get_model_aligned_recommendation(
         "risk": round(float(risk), 1),
         "confidence": round(float(confidence * 100), 1),
         "signal": normalized_signal,
+        "alternate_action": "AVOID fresh entry; SELL/EXIT if already holding." if normalized_signal == "Down" else None,
     }
 
 
@@ -291,7 +297,7 @@ def get_auditor_recommendation(expected_return: float, risk_score: float) -> str
     elif expected_return > 0:
         recommendation = f"BUY: Positive expected return ({expected_return:.2f}%) still supports a buy view."
     else:
-        recommendation = f"AVOID: Expected return ({expected_return:.2f}%) is below the minimum target."
+        recommendation = f"SELL: Expected return ({expected_return:.2f}%) is below the minimum target."
 
     return recommendation
 
@@ -307,7 +313,7 @@ def get_trader_action(signal: str, confidence: float) -> str:
     if expected_return > 0 and estimated_risk <= RISK_SCORE_BUY and score > 0:
         return 'Buy'
     if expected_return < 0:
-        return 'Avoid'
+        return 'Sell'
     return 'Hold'
 
 

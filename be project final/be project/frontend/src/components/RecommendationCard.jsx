@@ -8,20 +8,24 @@ const buildRecommendationFromMetrics = (metrics, pred, sym) => {
   const risk = Number(metrics?.risk ?? pred?.risk ?? 5.0)
   const confidence = Number(pred?.confidence ?? 0.5)
   const signal = pred?.signal || 'Neutral'
+  const hasPosition = Boolean(pred?.has_position)
   const score = Number((expectedReturn / Math.max(risk, 0.5)).toFixed(2))
+  const bullishSetup = signal === 'Up'
+  const bearishSetup = signal === 'Down'
+  const alternateAction = bearishSetup ? 'Avoid fresh entry; if already holding, consider SELL/EXIT.' : null
 
   let recommendation = 'HOLD'
   let color = 'yellow'
   let reason = `ML trend model is neutral or not strong enough yet: expected return ${expectedReturn.toFixed(2)}%, risk ${risk.toFixed(1)}/10, score ${score.toFixed(2)}.`
 
-  if (signal === 'Up' && expectedReturn >= 0.6 && confidence >= 0.42 && risk <= 8.5) {
+  if (bullishSetup) {
     recommendation = 'BUY'
     color = 'green'
-    reason = `ML trend model is bullish with ${(confidence * 100).toFixed(1)}% confidence and ${expectedReturn.toFixed(2)}% expected return.`
-  } else if (signal === 'Down' && expectedReturn <= -0.4) {
-    recommendation = 'AVOID'
+    reason = `ML trend model is bullish with ${(confidence * 100).toFixed(1)}% confidence, so up-trending stocks are shown as BUY instead of HOLD.`
+  } else if (bearishSetup) {
+    recommendation = hasPosition ? 'SELL' : 'AVOID'
     color = 'red'
-    reason = `ML trend model is bearish with ${(confidence * 100).toFixed(1)}% confidence and ${expectedReturn.toFixed(2)}% expected return.`
+    reason = `ML trend model is bearish with ${(confidence * 100).toFixed(1)}% confidence. ${alternateAction}`
   }
 
   return {
@@ -34,8 +38,37 @@ const buildRecommendationFromMetrics = (metrics, pred, sym) => {
     expected_return: Number(expectedReturn.toFixed(2)),
     risk: Number(risk.toFixed(1)),
     confidence: Number((confidence * 100).toFixed(1)),
-    signal
+    signal,
+    has_position: hasPosition,
+    alternate_action: alternateAction
   }
+}
+
+const mergeRecommendationWithPrediction = (recommendationData, metrics, pred, symbol) => {
+  const fallback = buildRecommendationFromMetrics(metrics, pred, symbol)
+
+  if (!recommendationData?.recommendation) {
+    return fallback
+  }
+
+  const normalized = String(recommendationData.recommendation || '').toUpperCase()
+  if (normalized === 'HOLD' && fallback.recommendation !== 'HOLD') {
+        return {
+          ...recommendationData,
+          recommendation: fallback.recommendation,
+          color: fallback.color,
+          reason: fallback.reason,
+          score: fallback.score,
+          expected_return: fallback.expected_return,
+          risk: fallback.risk,
+          confidence: fallback.confidence,
+          signal: fallback.signal,
+          has_position: fallback.has_position,
+          alternate_action: fallback.alternate_action
+        }
+      }
+
+  return recommendationData
 }
 
 const RecommendationCard = ({ symbol, market = 'US', onRecommendationChange, predictionMetrics, prediction, recommendationData }) => {
@@ -50,8 +83,9 @@ const RecommendationCard = ({ symbol, market = 'US', onRecommendationChange, pre
     }
 
     if (recommendationData?.recommendation) {
-      setRecommendation(recommendationData)
-      onRecommendationChange?.(recommendationData)
+      const merged = mergeRecommendationWithPrediction(recommendationData, predictionMetrics, prediction, symbol)
+      setRecommendation(merged)
+      onRecommendationChange?.(merged)
       setLoading(false)
       return
     }
@@ -61,8 +95,9 @@ const RecommendationCard = ({ symbol, market = 'US', onRecommendationChange, pre
       try {
         const result = await getRecommendation(symbol, market)
         if (result && result.success && result.recommendation) {
-          setRecommendation(result)
-          onRecommendationChange?.(result)
+          const merged = mergeRecommendationWithPrediction(result, predictionMetrics, prediction, symbol)
+          setRecommendation(merged)
+          onRecommendationChange?.(merged)
           return
         }
       } catch (error) {
@@ -99,7 +134,7 @@ const RecommendationCard = ({ symbol, market = 'US', onRecommendationChange, pre
     return null
   }
 
-  const { recommendation: rec, reason, color, score, expected_return, risk, confidence, signal } = recommendation
+  const { recommendation: rec, reason, color, score, expected_return, risk, confidence, signal, alternate_action } = recommendation
 
   const colorClasses = {
     green: 'bg-green-50 border-green-200 text-green-800',
@@ -162,7 +197,8 @@ const RecommendationCard = ({ symbol, market = 'US', onRecommendationChange, pre
                   <ul className="space-y-1 list-disc list-inside text-gray-300">
                     <li>Score = Expected Return / Risk</li>
                     <li>BUY: Positive return with acceptable risk</li>
-                    <li>AVOID: Negative expected return or clear downside setup</li>
+                    <li>SELL: Bearish setup for stocks already held</li>
+                    <li>AVOID: Bearish setup for fresh entries</li>
                     <li>HOLD: Mixed setup that is not clearly bullish or bearish</li>
                   </ul>
                   <div className="mt-2 pt-2 border-t border-gray-700">
@@ -177,6 +213,11 @@ const RecommendationCard = ({ symbol, market = 'US', onRecommendationChange, pre
         </div>
 
         <p className="text-base font-medium mb-4 leading-relaxed">{reason}</p>
+        {alternate_action && (
+          <div className="mb-4 rounded-lg bg-white/60 border border-current/20 p-3 text-sm font-semibold">
+            {alternate_action}
+          </div>
+        )}
 
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 pt-4 border-t border-current/20">
           <div>

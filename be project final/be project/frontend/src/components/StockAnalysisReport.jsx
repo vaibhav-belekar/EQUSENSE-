@@ -27,17 +27,18 @@ import {
 const normalizeRecommendationLabel = (value) => {
   const normalized = String(value || '').trim().toUpperCase()
   if (normalized === 'BUY') return 'BUY'
+  if (normalized === 'SELL') return 'SELL'
   if (normalized === 'AVOID') return 'AVOID'
   if (normalized === 'HOLD') return 'HOLD'
   return ''
 }
 
-const getModelFallbackRecommendation = (signal, expectedReturn, risk, confidence, score) => {
-  if (signal === 'Up' && expectedReturn >= 0.6 && confidence >= 0.42 && risk <= 8.5 && score > 0) {
+const getModelFallbackRecommendation = (signal, expectedReturn, risk, confidence, score, hasPosition = false) => {
+  if (signal === 'Up') {
     return 'BUY'
   }
-  if (signal === 'Down' && expectedReturn <= -0.4) {
-    return 'AVOID'
+  if (signal === 'Down') {
+    return hasPosition ? 'SELL' : 'AVOID'
   }
   return 'HOLD'
 }
@@ -79,13 +80,14 @@ const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPer
     expectedReturn,
     modeledRisk,
     Number(prediction.confidence ?? 0.5),
-    score
+    score,
+    Boolean(report.has_position)
   )
 
   const recommendationColor =
     recommendationFromReport === 'BUY'
       ? 'green'
-      : recommendationFromReport === 'AVOID'
+      : recommendationFromReport === 'SELL' || recommendationFromReport === 'AVOID'
         ? 'red'
         : 'yellow'
 
@@ -103,7 +105,9 @@ const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPer
     expected_return: expectedReturn,
     risk: modeledRisk,
     confidence: Number((prediction.confidence ?? 0.5) * 100),
-    signal: prediction.signal || 'Neutral'
+    signal: prediction.signal || 'Neutral',
+    has_position: Boolean(report.has_position),
+    alternate_action: report.alternate_action || (prediction.signal === 'Down' ? 'Avoid fresh entry; if already holding, consider SELL/EXIT.' : null)
   }
 
   const chartData = []
