@@ -8,7 +8,11 @@ import {
   Brain,
   Search,
   Clock,
-  X
+  X,
+  MoreVertical,
+  Info,
+  Users,
+  Mail
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { 
@@ -99,6 +103,8 @@ const StockScreener = () => {
   const [portfolio, setPortfolio] = useState(null)
   const [showComparisonModal, setShowComparisonModal] = useState(false)
   const [comparisonStocks, setComparisonStocks] = useState([])
+  const [showHeaderMenu, setShowHeaderMenu] = useState(false)
+  const [activeInfoPanel, setActiveInfoPanel] = useState(null)
   const activeSearchRequestRef = useRef(0)
 
   // Check backend status on mount and periodically
@@ -1014,6 +1020,32 @@ const StockScreener = () => {
     return filtered
   }, [availableStocks, searchTerm])
 
+  const teamMembers = [
+    {
+      name: 'Vaibhav Belekar',
+      email: 'vaibhavsbelekar7@gmail.com',
+      linkedin: 'https://www.linkedin.com/in/vaibhav-belekar-302079387'
+    },
+    {
+      name: 'Aditya Daghle',
+      email: 'adityadaghle12@gmail.com'
+    },
+    {
+      name: 'Aditya Rajvnshi',
+      email: 'aditya.rajvnshi4774@gmail.com'
+    },
+    {
+      name: 'Vaibhav Sable',
+      email: 'sablevaibhav18@gmail.com'
+    },
+    {
+      name: 'Darshan Shinde',
+      email: 'darshanshinde237@gmail.com'
+    }
+  ]
+
+  const projectSummary = 'Equisense is an AI-powered stock analysis platform for smart investing. It combines ML-based trend prediction, recommendation signals, news sentiment, charts, and virtual trading to help users understand whether a stock setup looks like BUY, HOLD, SELL, or AVOID.'
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 text-gray-900">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -1024,19 +1056,56 @@ const StockScreener = () => {
               <BarChart3 className="w-10 h-10 text-blue-600" />
               Equisense
             </h1>
-            {/* Backend Status Indicator */}
-            {!backendStatus.checking && (
-              <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm font-semibold ${
-                backendStatus.connected 
-                  ? 'bg-green-100 text-green-700' 
-                  : 'bg-red-100 text-red-700'
-              }`}>
-                <div className={`w-2 h-2 rounded-full ${
-                  backendStatus.connected ? 'bg-green-500' : 'bg-red-500'
-                }`}></div>
-                {backendStatus.connected ? 'Backend Connected' : 'Backend Offline'}
+            <div className="flex items-center gap-3">
+              {!backendStatus.checking && (
+                <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm font-semibold ${
+                  backendStatus.connected 
+                    ? 'bg-green-100 text-green-700' 
+                    : 'bg-red-100 text-red-700'
+                }`}>
+                  <div className={`w-2 h-2 rounded-full ${
+                    backendStatus.connected ? 'bg-green-500' : 'bg-red-500'
+                  }`}></div>
+                  {backendStatus.connected ? 'Backend Connected' : 'Backend Offline'}
+                </div>
+              )}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setShowHeaderMenu(prev => !prev)}
+                  className="p-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition-colors"
+                  aria-label="Open Equisense information menu"
+                >
+                  <MoreVertical className="w-5 h-5" />
+                </button>
+                {showHeaderMenu && (
+                  <div className="absolute right-0 top-12 z-50 w-56 rounded-xl border border-gray-200 bg-white shadow-xl overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveInfoPanel('about')
+                        setShowHeaderMenu(false)
+                      }}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-left text-sm text-gray-700 hover:bg-blue-50 transition-colors"
+                    >
+                      <Info className="w-4 h-4 text-blue-600" />
+                      About Equisense
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setActiveInfoPanel('team')
+                        setShowHeaderMenu(false)
+                      }}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-left text-sm text-gray-700 hover:bg-blue-50 transition-colors border-t border-gray-100"
+                    >
+                      <Users className="w-4 h-4 text-blue-600" />
+                      Our Team
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
           <p className="text-gray-600">Search stocks, analyze investments, and predict prices</p>
           {!backendStatus.connected && !backendStatus.checking && (
@@ -1049,6 +1118,84 @@ const StockScreener = () => {
             </div>
           )}
         </div>
+
+        {activeInfoPanel && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+            <div className="w-full max-w-lg rounded-2xl bg-white shadow-2xl border border-gray-200 overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-4 border-b border-gray-200">
+                <div>
+                  <h2 className="text-lg font-bold text-gray-900">
+                    {activeInfoPanel === 'about' ? 'About Equisense' : 'Our Team'}
+                  </h2>
+                  <p className="text-sm text-gray-500">
+                    {activeInfoPanel === 'about' ? 'About the project' : 'Team contact details'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveInfoPanel(null)}
+                  className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+                >
+                  <X className="w-5 h-5 text-gray-600" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-5">
+                {activeInfoPanel === 'about' ? (
+                  <>
+                    <div className="rounded-xl bg-blue-50 border border-blue-100 p-4">
+                      <p className="text-sm leading-6 text-gray-700">{projectSummary}</p>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="rounded-xl border border-gray-200 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">What It Does</p>
+                        <p className="text-sm text-gray-700">Shows trend-based stock predictions, recommendations, charts, news sentiment, and virtual trading support.</p>
+                      </div>
+                      <div className="rounded-xl border border-gray-200 p-4">
+                        <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Inquiry Email</p>
+                        <p className="text-sm text-gray-700 break-all">equisense18@gmail.com</p>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="rounded-xl bg-slate-50 border border-slate-200 p-4">
+                      <p className="text-sm font-semibold text-gray-800 mb-1">Equisense Project Team</p>
+                      <p className="text-sm text-gray-600">Created by our team as an AI-powered stock analysis platform.</p>
+                    </div>
+                    <div className="space-y-2">
+                      {teamMembers.map((member) => (
+                        <div key={member.email} className="rounded-xl border border-gray-200 px-4 py-3">
+                          <div className="flex items-start gap-3">
+                            <Mail className="w-4 h-4 text-blue-600 flex-shrink-0 mt-0.5" />
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-semibold text-gray-800">{member.name}</p>
+                              <p className="text-sm text-gray-700 break-all">{member.email}</p>
+                              {member.linkedin && (
+                                <a
+                                  href={member.linkedin}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="inline-block mt-2 text-xs font-medium text-blue-600 hover:text-blue-800 underline"
+                                >
+                                  LinkedIn
+                                </a>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="rounded-xl border border-gray-200 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-2">Project Inquiry</p>
+                      <p className="text-sm text-gray-700 break-all">equisense18@gmail.com</p>
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Investment Parameters */}
         <motion.div
