@@ -13,6 +13,8 @@ import os
 import asyncio
 from datetime import datetime
 import json
+import copy
+import time
 import pandas as pd
 import numpy as np
 
@@ -82,6 +84,14 @@ app.add_middleware(
 # Global ecosystem instance
 ecosystem: Optional[TradingEcosystem] = None
 database_manager = DatabaseManager()
+response_cache: Dict[str, Dict] = {}
+
+CACHE_TTLS = {
+    "realtime_price": 15,
+    "ohlc": 180,
+    "recommendation": 90,
+    "company_info": 1800,
+}
 
 # Indian stock symbol normalization
 INDIAN_SYMBOL_ALIASES = {
@@ -192,6 +202,38 @@ def normalize_symbol(symbol: str, market_hint: str = None):
             fetch_symbol = f"{normalized}.NS"
 
     return normalized, market, fetch_symbol
+
+
+def build_cache_key(namespace: str, *parts) -> str:
+    normalized = [namespace]
+    normalized.extend(str(part) for part in parts)
+    return "::".join(normalized)
+
+
+def get_cached_response(cache_key: str):
+    cached = response_cache.get(cache_key)
+    if not cached:
+        return None
+
+    ttl = cached.get("ttl", 0)
+    age = time.time() - cached.get("stored_at", 0)
+    if age > ttl:
+        response_cache.pop(cache_key, None)
+        return None
+
+    payload = copy.deepcopy(cached.get("payload"))
+    if isinstance(payload, dict):
+        payload["cached"] = True
+        payload["cache_age_seconds"] = round(age, 1)
+    return payload
+
+
+def set_cached_response(cache_key: str, payload: Dict, ttl_key: str):
+    response_cache[cache_key] = {
+        "payload": copy.deepcopy(payload),
+        "stored_at": time.time(),
+        "ttl": CACHE_TTLS.get(ttl_key, 60),
+    }
 
 
 def ensure_market_ecosystem(symbols: List[str], market: str = "US", initial_capital: float = 100000.0):
@@ -500,6 +542,11 @@ async def get_predictions():
 async def get_ohlc_data(symbol: str, period: str = "1mo", interval: str = "1d", market: str = "US"):
     """Get OHLC data for candlestick charts"""
     global ecosystem
+    base_symbol, market, fetch_symbol = normalize_symbol(symbol, market_hint=market)
+    cache_key = build_cache_key("ohlc", fetch_symbol, market, period, interval)
+    cached_payload = get_cached_response(cache_key)
+    if cached_payload is not None:
+        return cached_payload
     
     # Initialize minimal ecosystem if not already initialized (for data fetching only)
     if ecosystem is None:
@@ -513,7 +560,6 @@ async def get_ohlc_data(symbol: str, period: str = "1mo", interval: str = "1d", 
             raise HTTPException(status_code=500, detail=f"Could not initialize data collector: {str(e)}")
     
     try:
-        base_symbol, market, fetch_symbol = normalize_symbol(symbol, market_hint=market)
         print(f"[API] Analyzing {symbol}, market: {market}, fetch_symbol: {fetch_symbol}, base_symbol: {base_symbol}")
         
         print(f"[API] Getting OHLC data for {symbol} -> {fetch_symbol} (market: {market}, period: {period}, interval: {interval})")
@@ -588,12 +634,14 @@ async def get_ohlc_data(symbol: str, period: str = "1mo", interval: str = "1d", 
         
         print(f"[API] Returning {len(ohlc_data)} data points for {symbol}")
         
-        return {
+        payload = {
             "success": True,
             "symbol": symbol,
             "market": market,
             "data": ohlc_data
         }
+        set_cached_response(cache_key, payload, "ohlc")
+        return payload
     except HTTPException:
         # Re-raise HTTP exceptions (like 404, 400) as-is
         raise
@@ -614,6 +662,10 @@ async def get_realtime_price(symbol: str, market: str = "US"):
     
     try:
         base_symbol, market, fetch_symbol = normalize_symbol(symbol, market_hint=market)
+        cache_key = build_cache_key("realtime_price", fetch_symbol, market)
+        cached_payload = get_cached_response(cache_key)
+        if cached_payload is not None:
+            return cached_payload
         symbol = symbol.upper()
         
         price = None
@@ -669,7 +721,7 @@ async def get_realtime_price(symbol: str, market: str = "US"):
                 "message": f"Could not get price for {symbol}. Please check if the symbol is correct."
             }
         
-        return {
+        payload = {
             "success": True,
             "symbol": symbol,
             "market": market,
@@ -677,6 +729,8 @@ async def get_realtime_price(symbol: str, market: str = "US"):
             "current_price": float(price),
             "timestamp": datetime.now().isoformat()
         }
+        set_cached_response(cache_key, payload, "realtime_price")
+        return payload
     except Exception as e:
         print(f"[API] Error getting real-time price: {str(e)}")
         import traceback
@@ -762,6 +816,10 @@ async def get_company_info(symbol: str, market: str = "US"):
     """Get company information including sector, market cap, P/E ratio, etc."""
     try:
         base_symbol, market, fetch_symbol = normalize_symbol(symbol, market_hint=market)
+        cache_key = build_cache_key("company_info", fetch_symbol, market)
+        cached_payload = get_cached_response(cache_key)
+        if cached_payload is not None:
+            return cached_payload
         print(f"[API] Getting company info for {symbol} -> {fetch_symbol} (market: {market})")
         
         # Check for local logo first using logo_mapper
@@ -1012,7 +1070,7 @@ async def get_company_info(symbol: str, market: str = "US"):
                     logo_url = f"https://logo.clearbit.com/{data['website']}"
         
         # Always return data, even if minimal
-        return {
+        payload = {
             "success": True,
             "symbol": symbol,
             "fetch_symbol": fetch_symbol,
@@ -1026,6 +1084,8 @@ async def get_company_info(symbol: str, market: str = "US"):
             "website": website,
             "market": market
         }
+        set_cached_response(cache_key, payload, "company_info")
+        return payload
     except HTTPException:
         raise
     except Exception as e:
@@ -1514,6 +1574,10 @@ async def get_recommendation(symbol: str, market: str = "US"):
         
         # Determine market from symbol
         base_symbol, market, fetch_symbol = normalize_symbol(symbol, market_hint=market)
+        cache_key = build_cache_key("recommendation", fetch_symbol, market)
+        cached_payload = get_cached_response(cache_key)
+        if cached_payload is not None:
+            return cached_payload
         
         print(f"[API] Getting recommendation for {symbol} -> {fetch_symbol} (market: {market})")
         
@@ -1628,7 +1692,7 @@ async def get_recommendation(symbol: str, market: str = "US"):
                 f"{recommendation_summary['sentiment_impact']:+.2f}%."
             )
         
-        return {
+        payload = {
             "success": True,
             "symbol": symbol,
             "recommendation": recommendation_data["recommendation"],
@@ -1653,6 +1717,8 @@ async def get_recommendation(symbol: str, market: str = "US"):
             },
             "risk_alerts": recommendation_summary.get("risk_alerts", []),
         }
+        set_cached_response(cache_key, payload, "recommendation")
+        return payload
     except HTTPException:
         raise
     except Exception as e:

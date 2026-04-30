@@ -133,7 +133,7 @@ const TradingCall = ({
   else if (tradingCall === 'AVOID') rationale.push('Avoid fresh entry while the setup remains bearish.')
   else if (tradingCall === 'HOLD') rationale.push('Waiting for cleaner confirmation is safer than forcing an entry here.')
 
-  const currencySymbol = market === 'IN' ? '₹' : '$'
+  const currencySymbol = market === 'IN' ? '\u20b9' : '$'
   const formatPrice = (price) => `${currencySymbol}${Number(price).toLocaleString('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 })}`
   const planStatusText = tradingCall === 'SELL'
     ? 'Bearish setup active. Sell or exit on weakness.'

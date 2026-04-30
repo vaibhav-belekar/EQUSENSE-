@@ -8,7 +8,8 @@ import {
   Brain,
   Search,
   Clock,
-  X
+  X,
+  Activity
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { 
@@ -99,6 +100,7 @@ const StockScreener = () => {
   const [portfolio, setPortfolio] = useState(null)
   const [showComparisonModal, setShowComparisonModal] = useState(false)
   const [comparisonStocks, setComparisonStocks] = useState([])
+  const [activeSearchMeta, setActiveSearchMeta] = useState({ symbol: '', phase: 'idle', message: '' })
   const activeSearchRequestRef = useRef(0)
 
   // Check backend status on mount and periodically
@@ -444,6 +446,18 @@ const StockScreener = () => {
     }
   }
 
+  const currencySymbol = market === 'IN' ? '\u20b9' : '$'
+
+  const upsertSearchResult = (stockData) => {
+    setSearchResults((prev) => {
+      const existingIndex = prev.findIndex((item) => item.symbol === stockData.symbol)
+      if (existingIndex >= 0) {
+        return prev.map((item, index) => (index === existingIndex ? { ...item, ...stockData } : item))
+      }
+      return [...prev, stockData]
+    })
+  }
+
   const handleSearch = async (forcedSymbol = null) => {
     const resolved = resolveSearchSymbol(forcedSymbol || searchTerm)
     if (!resolved.symbol) {
@@ -467,212 +481,196 @@ const StockScreener = () => {
     }
 
     setSearching(true)
-    try {
-      await refreshPortfolio()
 
-      // Fetch real-time price
-      const [priceResult, ohlcResult, recommendationResult] = await Promise.allSettled([
-        getRealtimePrice(symbol, market),
-        getOHLCData(symbol, '1mo', '1d', market),
-        getRecommendation(symbol, market),
-      ])
+    const placeholderPrediction = buildPredictionFromSignal({
+      signal: 'Neutral',
+      confidence: 0.5,
+      expected_return: 0.2,
+      risk: 5.0,
+      score: 0.04
+    })
+    const placeholderStockData = {
+      symbol,
+      price: stockPrices[symbol] ?? null,
+      timePeriod: investmentPeriod,
+      prediction: placeholderPrediction,
+      isLoading: true
+    }
 
-      let price = null
-      if (priceResult.status === 'fulfilled' && priceResult.value?.success) {
-        price = priceResult.value.price || priceResult.value.current_price
-      } else if (priceResult.status === 'rejected') {
-        console.error('Error fetching price:', priceResult.reason)
-      }
+    upsertSearchResult(placeholderStockData)
+    setSelectedStockData(placeholderStockData)
+    setPredictionMetrics({
+      expectedReturn: 0.2,
+      risk: 5.0,
+      sharpeRatio: 0.04
+    })
+    setActiveSearchMeta({
+      symbol,
+      phase: 'streaming',
+      message: 'Pulling live price, chart history, and model recommendation.'
+    })
+    setSearching(false)
 
-      // Fetch predictions for the symbol - always create prediction from price data
-      let prediction = null
-      let ohlcDataForPrediction = ohlcResult.status === 'fulfilled' ? ohlcResult.value : null
-      
-      try {
-        if (ohlcDataForPrediction && ohlcDataForPrediction.success && ohlcDataForPrediction.data && ohlcDataForPrediction.data.length >= 2) {
-          const prices = ohlcDataForPrediction.data.map(d => d.close).filter(p => p > 0)
-          if (prices.length >= 2) {
-            const recentPrice = prices[prices.length - 1]
-            const previousPrice = prices[prices.length - 2]
-            const change = (recentPrice - previousPrice) / previousPrice
-            const change5 = prices.length >= 6 ? (recentPrice - prices[prices.length - 6]) / prices[prices.length - 6] : change
-            const change20 = prices.length >= 21 ? (recentPrice - prices[prices.length - 21]) / prices[prices.length - 21] : change5
-            const trendScore = (change * 0.45) + (change5 * 0.35) + (change20 * 0.20)
-            
-            if (!price) {
-              price = recentPrice
-            }
-            
-            if (trendScore >= 0.01) {
-              prediction = { signal: 'Up', confidence: Math.min(0.86, 0.52 + Math.abs(trendScore) * 10) }
-            } else if (trendScore <= -0.01) {
-              prediction = { signal: 'Down', confidence: Math.min(0.86, 0.52 + Math.abs(trendScore) * 10) }
-            } else {
-              prediction = { signal: 'Neutral', confidence: 0.55 }
-            }
-          } else if (prices.length === 1 && !price) {
-            price = prices[0]
-            prediction = { signal: 'Neutral', confidence: 0.5 }
-          }
-        } else if (ohlcResult.status === 'rejected') {
-          console.log('[StockScreener] Could not fetch price data for prediction:', ohlcResult.reason)
+    getCompanyInfo(symbol, market)
+      .then((companyDataResult) => {
+        if (activeSearchRequestRef.current === requestId && companyDataResult?.success) {
+          setCompanyInfo(companyDataResult)
         }
-        
-        if (recommendationResult.status === 'fulfilled') {
-          const recommendationPayload = recommendationResult.value
-          if (recommendationPayload && recommendationPayload.success) {
-            const normalizedRecommendation = normalizeRecommendationPayload(recommendationPayload, null, symbol)
+      })
+      .catch((error) => {
+        console.log('[StockScreener] Company info fetch failed:', error)
+      })
+
+    refreshPortfolio()
+
+    Promise.allSettled([
+      getRealtimePrice(symbol, market),
+      getOHLCData(symbol, '1mo', '1d', market),
+      getRecommendation(symbol, market),
+    ])
+      .then(([priceResult, ohlcResult, recommendationResult]) => {
+        if (activeSearchRequestRef.current !== requestId) {
+          return
+        }
+
+        let price = placeholderStockData.price
+        if (priceResult.status === 'fulfilled' && priceResult.value?.success) {
+          price = priceResult.value.price || priceResult.value.current_price
+        } else if (priceResult.status === 'rejected') {
+          console.error('Error fetching price:', priceResult.reason)
+        }
+
+        let prediction = null
+        const ohlcDataForPrediction = ohlcResult.status === 'fulfilled' ? ohlcResult.value : null
+
+        try {
+          if (ohlcDataForPrediction?.success && Array.isArray(ohlcDataForPrediction.data) && ohlcDataForPrediction.data.length >= 2) {
+            const prices = ohlcDataForPrediction.data.map((item) => item.close).filter((item) => item > 0)
+            if (prices.length >= 2) {
+              const recentPrice = prices[prices.length - 1]
+              const previousPrice = prices[prices.length - 2]
+              const change = (recentPrice - previousPrice) / previousPrice
+              const change5 = prices.length >= 6 ? (recentPrice - prices[prices.length - 6]) / prices[prices.length - 6] : change
+              const change20 = prices.length >= 21 ? (recentPrice - prices[prices.length - 21]) / prices[prices.length - 21] : change5
+              const trendScore = (change * 0.45) + (change5 * 0.35) + (change20 * 0.20)
+
+              if (!price) {
+                price = recentPrice
+              }
+
+              if (trendScore >= 0.01) {
+                prediction = { signal: 'Up', confidence: Math.min(0.86, 0.52 + Math.abs(trendScore) * 10) }
+              } else if (trendScore <= -0.01) {
+                prediction = { signal: 'Down', confidence: Math.min(0.86, 0.52 + Math.abs(trendScore) * 10) }
+              } else {
+                prediction = { signal: 'Neutral', confidence: 0.55 }
+              }
+            } else if (prices.length === 1 && !price) {
+              price = prices[0]
+              prediction = { signal: 'Neutral', confidence: 0.5 }
+            }
+          } else if (ohlcResult.status === 'rejected') {
+            console.log('[StockScreener] Could not fetch price data for prediction:', ohlcResult.reason)
+          }
+
+          if (recommendationResult.status === 'fulfilled' && recommendationResult.value?.success) {
+            const normalizedRecommendation = normalizeRecommendationPayload(recommendationResult.value, prediction, symbol)
             prediction = buildPredictionFromSignal(normalizedRecommendation)
             setRecommendation(normalizedRecommendation)
           }
-        } else {
-          console.log('[StockScreener] Recommendation API failed, keeping fallback prediction')
+        } catch (error) {
+          console.log('[StockScreener] Error in prediction logic:', error)
         }
-      } catch (error) {
-        console.log('[StockScreener] Error in prediction logic:', error)
-      }
-      
-      // Always ensure we have a prediction (default if all methods failed)
-      if (!prediction) {
-        prediction = buildPredictionFromSignal({ signal: 'Neutral', confidence: 0.5, expected_return: 0.2, risk: 5.0, score: 0.04 })
-      }
 
-      // Fetch company info (non-blocking)
-      getCompanyInfo(symbol, market)
-        .then(companyDataResult => {
-          if (activeSearchRequestRef.current === requestId && companyDataResult && companyDataResult.success) {
-            setCompanyInfo(companyDataResult)
-          }
-        })
-        .catch(error => {
-          console.log('[StockScreener] Company info fetch failed:', error)
-        })
+        if (!prediction) {
+          prediction = placeholderPrediction
+        }
 
-      // Fetch price history for chart (reuse data if already fetched)
-      if (ohlcDataForPrediction && ohlcDataForPrediction.success && ohlcDataForPrediction.data) {
-        // Use the data we already fetched
-        const history = ohlcDataForPrediction.data.slice(-180).map(item => ({ // Last 6 months
-          date: item.date,
-          price: item.close,
-          value: item.close
-        }))
-        if (activeSearchRequestRef.current === requestId) {
+        if (ohlcDataForPrediction?.success && Array.isArray(ohlcDataForPrediction.data)) {
+          const history = ohlcDataForPrediction.data.slice(-180).map((item) => ({
+            date: item.date,
+            price: item.close,
+            value: item.close
+          }))
           setPriceHistory(history)
-        }
-      } else {
-        // Fetch separately if not already available
-        getOHLCData(symbol, '6mo', '1d', market)
-          .then(ohlcData => {
-            if (ohlcData && ohlcData.success && ohlcData.data) {
-              const history = ohlcData.data.map(item => ({
-                date: item.date,
-                price: item.close,
-                value: item.close
-              }))
-              if (activeSearchRequestRef.current === requestId) {
+        } else {
+          getOHLCData(symbol, '6mo', '1d', market)
+            .then((ohlcData) => {
+              if (activeSearchRequestRef.current === requestId && ohlcData?.success && Array.isArray(ohlcData.data)) {
+                const history = ohlcData.data.map((item) => ({
+                  date: item.date,
+                  price: item.close,
+                  value: item.close
+                }))
                 setPriceHistory(history)
               }
-            }
-          })
-          .catch(error => {
-            console.log('[StockScreener] Price history fetch failed:', error)
-          })
-      }
-
-      // Fetch recommendation from backend (uses unified recommendation engine)
-      let recommendationData = recommendationResult.status === 'fulfilled'
-        ? normalizeRecommendationPayload(recommendationResult.value, prediction, symbol)
-        : recommendation
-      let calculatedExpectedReturn = prediction.expected_return ?? 0
-      let calculatedRisk = prediction.risk ?? 5.0
-      
-      try {
-        if (recommendationData && recommendationData.success) {
-          if (activeSearchRequestRef.current === requestId) {
-            setRecommendation(recommendationData)
-          }
-          
-          calculatedExpectedReturn = recommendationData.expected_return || 0
-          calculatedRisk = recommendationData.risk || 5.0
+            })
+            .catch((error) => {
+              console.log('[StockScreener] Price history fetch failed:', error)
+            })
         }
-      } catch (recError) {
-        console.warn('Recommendation API failed, using prediction-based values:', recError)
-      }
-      
-      // Calculate Sharpe Ratio
-      const sharpeRatio = calculatedExpectedReturn > 0 && calculatedRisk > 0
-        ? (calculatedExpectedReturn / calculatedRisk)
-        : 0
-      
-      // Always set prediction metrics, even if values are 0
-      if (activeSearchRequestRef.current === requestId) {
+
+        const recommendationData = recommendationResult.status === 'fulfilled'
+          ? normalizeRecommendationPayload(recommendationResult.value, prediction, symbol)
+          : recommendation
+        let calculatedExpectedReturn = prediction.expected_return ?? 0
+        let calculatedRisk = prediction.risk ?? 5.0
+
+        try {
+          if (recommendationData?.success) {
+            calculatedExpectedReturn = recommendationData.expected_return || 0
+            calculatedRisk = recommendationData.risk || 5.0
+          }
+        } catch (recError) {
+          console.warn('Recommendation API failed, using prediction-based values:', recError)
+        }
+
+        const sharpeRatio = calculatedExpectedReturn > 0 && calculatedRisk > 0
+          ? (calculatedExpectedReturn / calculatedRisk)
+          : 0
+
         setPredictionMetrics({
           expectedReturn: calculatedExpectedReturn,
           risk: calculatedRisk,
-          sharpeRatio: sharpeRatio
+          sharpeRatio
         })
-      }
 
-      // Add to search results if not already there
-      const stockData = {
-        symbol: symbol,
-        price: price,
-        timePeriod: investmentPeriod,
-        prediction: prediction
-      }
-
-      // Check if stock already exists in results
-      const existingIndex = searchResults.findIndex(s => s.symbol === symbol)
-      if (existingIndex >= 0) {
-        // Update existing
-        setSearchResults(prev => prev.map((s, idx) => 
-          idx === existingIndex ? stockData : s
-        ))
-      } else {
-        // Add new
-        setSearchResults(prev => [...prev, stockData])
-      }
-
-      // Set as selected stock for detailed view
-      if (activeSearchRequestRef.current === requestId) {
-        setSelectedStockData(stockData)
-        setStockPrices(prev => ({ ...prev, [symbol]: price }))
-      }
-      
-      // Show success message (even if some data is missing)
-      if (price) {
-        const currencySymbol = market === 'IN' ? '₹' : '$'
-        toast.success(`Found ${symbol} - ${currencySymbol}${price.toFixed(2)}`)
-      } else {
-        toast.success(`Found ${symbol}`)
-      }
-    } catch (error) {
-      console.error('Error searching stock:', error)
-      // Don't show error if we at least got the symbol - try to continue
-      if (searchTerm.trim()) {
-        const symbol = resolved.symbol
-        // Create minimal stock data
-        const minimalStockData = {
-          symbol: symbol,
-          price: null,
+        const stockData = {
+          symbol,
+          price,
           timePeriod: investmentPeriod,
-          prediction: { signal: 'Neutral', confidence: 0.5 }
+          prediction,
+          isLoading: false
         }
-        if (activeSearchRequestRef.current === requestId) {
-          setSelectedStockData(minimalStockData)
-          setPredictionMetrics({
-            expectedReturn: 0.2,
-            risk: 5.0,
-            sharpeRatio: 0.04
-          })
+
+        upsertSearchResult(stockData)
+        setSelectedStockData(stockData)
+        if (price) {
+          setStockPrices((prev) => ({ ...prev, [symbol]: price }))
         }
-        toast.error('Some data unavailable. Please check backend connection.')
-      } else {
-        toast.error('Failed to search stock. Please try again.')
-      }
-    } finally {
-      setSearching(false)
-    }
+
+        setActiveSearchMeta({
+          symbol,
+          phase: 'ready',
+          message: price
+            ? `Live data loaded for ${symbol} at ${currencySymbol}${Number(price).toFixed(2)}.`
+            : `Model summary loaded for ${symbol}.`
+        })
+        toast.success(price ? `Found ${symbol} - ${currencySymbol}${Number(price).toFixed(2)}` : `Found ${symbol}`)
+      })
+      .catch((error) => {
+        console.error('Error searching stock:', error)
+        if (activeSearchRequestRef.current !== requestId) {
+          return
+        }
+        setSelectedStockData({ ...placeholderStockData, isLoading: false })
+        setActiveSearchMeta({
+          symbol,
+          phase: 'degraded',
+          message: 'Showing placeholder market state while live services recover.'
+        })
+        toast.error('Some live data is unavailable right now. Showing partial results.')
+      })
   }
 
   const ensureEcosystemInitialized = async (symbolsToInclude = []) => {
@@ -1015,7 +1013,7 @@ const StockScreener = () => {
   }, [availableStocks, searchTerm])
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 text-gray-900">
+    <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(59,130,246,0.18),_transparent_35%),linear-gradient(135deg,_#eef6ff_0%,_#f8fafc_45%,_#f2f7f2_100%)] text-gray-900">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8">
@@ -1041,7 +1039,7 @@ const StockScreener = () => {
           <p className="text-gray-600">Search stocks, analyze investments, and predict prices</p>
           {!backendStatus.connected && !backendStatus.checking && (
             <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-              <p className="text-yellow-800 font-semibold mb-1">⚠️ Backend Server Not Reachable</p>
+              <p className="text-yellow-800 font-semibold mb-1">Backend server not reachable</p>
               <p className="text-yellow-700 text-sm">
                 The frontend could not reach <code className="bg-yellow-100 px-1 rounded">{BACKEND_DISPLAY_URL}</code>.
                 If this is a deployed app, wait a few seconds for the backend to wake up and refresh once.
@@ -1063,7 +1061,7 @@ const StockScreener = () => {
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label htmlFor="investment-amount" className="block text-sm font-medium text-gray-700 mb-2">
-                Investment Amount (₹)
+                Investment Amount ({currencySymbol})
               </label>
               <input
                 id="investment-amount"
@@ -1118,6 +1116,24 @@ const StockScreener = () => {
           transition={{ delay: 0.1 }}
           className="bg-white rounded-xl shadow-md p-6 mb-6 border border-gray-200"
         >
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-800">Instant search</p>
+              <p className="text-sm text-slate-500">Quick snapshot first, detailed market layers right after.</p>
+            </div>
+            {activeSearchMeta.phase !== 'idle' && (
+              <div className={`inline-flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-semibold ${
+                activeSearchMeta.phase === 'ready'
+                  ? 'bg-emerald-50 text-emerald-700'
+                  : activeSearchMeta.phase === 'degraded'
+                    ? 'bg-amber-50 text-amber-700'
+                    : 'bg-sky-50 text-sky-700'
+              }`}>
+                <Activity className={`h-3.5 w-3.5 ${activeSearchMeta.phase === 'streaming' ? 'animate-pulse' : ''}`} />
+                {activeSearchMeta.message}
+              </div>
+            )}
+          </div>
           <div className="relative">
             <div className="flex gap-2">
               <div className="flex-1 relative">
@@ -1180,6 +1196,12 @@ const StockScreener = () => {
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
             {/* Left Column - Main Content (2/3 width) */}
             <div className="lg:col-span-2 space-y-6">
+              {selectedStockData.isLoading && (
+                <div className="rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-medium text-sky-800">
+                  Live market layers are still loading for {selectedStockData.symbol}. Price and recommendation cards will sharpen automatically.
+                </div>
+              )}
+
               {/* Trading Call Card */}
               <TradingCall
                 symbol={selectedStockData.symbol}
@@ -1275,7 +1297,7 @@ const StockScreener = () => {
                       Symbol
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Current Price (₹)
+                      Current Price ({currencySymbol})
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Time Period (Days)
@@ -1301,7 +1323,7 @@ const StockScreener = () => {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="text-sm text-gray-900">
-                            {typeof price === 'number' ? `₹${price.toFixed(2)}` : price}
+                            {typeof price === 'number' ? `${currencySymbol}${price.toFixed(2)}` : price}
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
@@ -1317,6 +1339,11 @@ const StockScreener = () => {
                               }`}>
                                 {signal}
                               </span>
+                              {stock.isLoading && (
+                                <span className="rounded-full bg-sky-50 px-2 py-1 text-[11px] font-semibold text-sky-700">
+                                  updating
+                                </span>
+                              )}
                               <span className="text-xs text-gray-600">
                                 {confidence.toFixed(0)}%
                               </span>
