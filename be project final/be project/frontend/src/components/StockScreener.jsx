@@ -9,14 +9,11 @@ import {
   Search,
   Clock,
   X,
-<<<<<<< HEAD
-  Activity
-=======
+  Activity,
   MoreVertical,
   Info,
   Users,
   Mail
->>>>>>> 6ecd2fec9073cfd9811ab0272c1716685115cc13
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { 
@@ -107,12 +104,9 @@ const StockScreener = () => {
   const [portfolio, setPortfolio] = useState(null)
   const [showComparisonModal, setShowComparisonModal] = useState(false)
   const [comparisonStocks, setComparisonStocks] = useState([])
-<<<<<<< HEAD
   const [activeSearchMeta, setActiveSearchMeta] = useState({ symbol: '', phase: 'idle', message: '' })
-=======
   const [showHeaderMenu, setShowHeaderMenu] = useState(false)
   const [activeInfoPanel, setActiveInfoPanel] = useState(null)
->>>>>>> 6ecd2fec9073cfd9811ab0272c1716685115cc13
   const activeSearchRequestRef = useRef(0)
 
   // Check backend status on mount and periodically
