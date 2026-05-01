@@ -50,10 +50,14 @@ const buildSummary = (payload) => {
   return `${symbol} has mixed recent news signals, so the overall sentiment remains neutral. The aggregate score across ${count} recent articles is ${score}.`
 }
 
-const NewsSentiment = ({ symbol, market = 'US', onFullAnalyze, onViewChart }) => {
-  const [newsPayload, setNewsPayload] = useState(null)
+const NewsSentiment = ({ symbol, market = 'US', onFullAnalyze, onViewChart, initialPayload = null }) => {
+  const [newsPayload, setNewsPayload] = useState(initialPayload)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    setNewsPayload(initialPayload || null)
+  }, [initialPayload, symbol])
 
   useEffect(() => {
     let active = true
@@ -78,14 +82,16 @@ const NewsSentiment = ({ symbol, market = 'US', onFullAnalyze, onViewChart }) =>
       }
     }
 
-    fetchNews(false)
+    if (!initialPayload) {
+      fetchNews(false)
+    }
     const intervalId = window.setInterval(() => fetchNews(true), 10 * 60 * 1000)
 
     return () => {
       active = false
       window.clearInterval(intervalId)
     }
-  }, [symbol, market])
+  }, [symbol, market, initialPayload])
 
   const handleRefresh = async () => {
     setLoading(true)

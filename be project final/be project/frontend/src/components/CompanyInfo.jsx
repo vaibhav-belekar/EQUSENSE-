@@ -4,14 +4,22 @@ import { Building2, TrendingUp, AlertCircle } from 'lucide-react'
 import { getCompanyInfo } from '../services/api'
 import { getLocalLogoPath, hasLocalLogo } from '../utils/logoMapper'
 
-const CompanyInfo = ({ symbol, market, expectedReturn, confidence }) => {
+const CompanyInfo = ({ symbol, market, expectedReturn, confidence, initialData = null }) => {
   const [companyData, setCompanyData] = useState(null)
   const [logoError, setLogoError] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(!initialData)
+
+  useEffect(() => {
+    setCompanyData(initialData || null)
+    setLoading(!initialData)
+  }, [initialData, symbol])
 
   // Fetch company info when symbol changes
   useEffect(() => {
     if (!symbol) return
+    if (initialData?.success && initialData?.symbol?.toUpperCase() === symbol?.toUpperCase()) {
+      return
+    }
 
     const fetchData = async () => {
       setLoading(true)
@@ -29,7 +37,7 @@ const CompanyInfo = ({ symbol, market, expectedReturn, confidence }) => {
     }
 
     fetchData()
-  }, [symbol, market])
+  }, [symbol, market, initialData])
 
   // Generate logo with first letter as fallback
   const getInitials = (name) => {

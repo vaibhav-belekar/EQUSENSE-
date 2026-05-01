@@ -294,6 +294,28 @@ export const getRecommendation = async (symbol, market = 'US') => {
   }
 }
 
+export const getSearchSummary = async (symbol, market = 'US') => {
+  try {
+    const response = await api.get(`/api/search-summary/${symbol}`, {
+      params: { market },
+      timeout: 12000
+    })
+    return response.data
+  } catch (error) {
+    console.error('[API] Error fetching search summary:', error)
+    return {
+      success: false,
+      symbol,
+      market,
+      price: null,
+      ohlc: null,
+      recommendation: null,
+      company_info: null,
+      news_sentiment: null,
+    }
+  }
+}
+
 export const getNewsSentiment = async (symbol, market = 'US', refresh = false) => {
   try {
     const response = await api.get(`/api/news-sentiment/${symbol}`, {

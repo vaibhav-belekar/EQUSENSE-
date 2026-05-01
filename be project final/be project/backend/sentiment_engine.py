@@ -229,7 +229,12 @@ def _is_relevant_article(symbol: str, fetch_symbol: str, article: Dict) -> bool:
     return any(candidate and candidate in haystack for candidate in candidates)
 
 
-def get_stock_news_sentiment(symbol: str, fetch_symbol: Optional[str] = None, force_refresh: bool = False) -> Dict:
+def get_stock_news_sentiment(
+    symbol: str,
+    fetch_symbol: Optional[str] = None,
+    force_refresh: bool = False,
+    cache_only: bool = False,
+) -> Dict:
     normalized_symbol = (symbol or "").upper().strip()
     resolved_symbol = (fetch_symbol or normalized_symbol).upper().strip()
     cache_key = f"{normalized_symbol}:{resolved_symbol}"
@@ -240,6 +245,21 @@ def get_stock_news_sentiment(symbol: str, fetch_symbol: Optional[str] = None, fo
         payload = dict(cached["payload"])
         payload["cached"] = True
         return payload
+
+    if cache_only:
+        return {
+            "success": True,
+            "symbol": normalized_symbol,
+            "fetch_symbol": resolved_symbol,
+            "score": 0.0,
+            "label": "Neutral",
+            "article_count": 0,
+            "headlines": [],
+            "source": "cache_only_fallback",
+            "cached": False,
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+            "message": "Live news is being prepared. Showing neutral sentiment for a faster first response.",
+        }
 
     articles = _parse_yfinance_news(resolved_symbol)
     source = "yfinance"

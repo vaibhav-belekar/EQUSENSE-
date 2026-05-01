@@ -91,6 +91,7 @@ CACHE_TTLS = {
     "ohlc": 180,
     "recommendation": 90,
     "company_info": 1800,
+    "search_summary": 45,
 }
 
 # Indian stock symbol normalization
@@ -1108,6 +1109,35 @@ async def get_company_info(symbol: str, market: str = "US"):
             "website": None,
             "market": market
         }
+
+
+@app.get("/api/search-summary/{symbol}")
+async def get_search_summary(symbol: str, market: str = "US"):
+    """Return a fast, single-call summary payload for the stock search screen."""
+    base_symbol, market, fetch_symbol = normalize_symbol(symbol, market_hint=market)
+    cache_key = build_cache_key("search_summary", fetch_symbol, market)
+    cached_payload = get_cached_response(cache_key)
+    if cached_payload is not None:
+        return cached_payload
+
+    price_payload = await get_realtime_price(symbol, market=market)
+    ohlc_payload = await get_ohlc_data(symbol, period="1mo", interval="1d", market=market)
+    recommendation_payload = await get_recommendation(symbol, market=market)
+    company_payload = await get_company_info(symbol, market=market)
+    news_payload = get_stock_news_sentiment(base_symbol, fetch_symbol=fetch_symbol, cache_only=True)
+
+    payload = {
+        "success": True,
+        "symbol": symbol.upper(),
+        "market": market,
+        "price": price_payload,
+        "ohlc": ohlc_payload,
+        "recommendation": recommendation_payload,
+        "company_info": company_payload,
+        "news_sentiment": news_payload,
+    }
+    set_cached_response(cache_key, payload, "search_summary")
+    return payload
 
 
 @app.get("/api/stocks/{market}")
