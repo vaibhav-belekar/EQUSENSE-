@@ -20,6 +20,8 @@ LOGO_MAP = {
     'ITC': 'ITC.png',
     'SBIN': 'SBIN.png',
     'BHARTIARTL': 'BHARTIARTL.png',
+    'BPCL': 'BPCL.svg',
+    'M&M': 'M_M.svg',
     
     # US Stocks
     'AAPL': 'AAPL.png',
@@ -129,4 +131,3 @@ def get_all_logos(logos_dir: Optional[Path] = None) -> dict:
             logos[symbol] = f"/logos/{file.name}"
     
     return logos
-

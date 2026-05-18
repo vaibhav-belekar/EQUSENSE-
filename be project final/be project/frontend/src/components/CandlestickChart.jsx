@@ -1,13 +1,22 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { motion } from 'framer-motion'
+import { LayoutGroup, motion } from 'framer-motion'
 import { TrendingUp, TrendingDown, X } from 'lucide-react'
 import { createChart, ColorType } from 'lightweight-charts'
 import { getOHLCData } from '../services/api'
+
+const TIMEFRAME_ACTIVE_COLOR = '#32277f'
+const TIMEFRAME_IDLE_COLOR = '#ece8ff'
+const CHART_REVEAL_DURATION_MS = 850
+const TECHNICAL_CHART_HEIGHT = 420
+const TECHNICAL_CHART_MODAL_HEIGHT = 460
 
 const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) => {
   const [ohlcData, setOhlcData] = useState([])
   const [loading, setLoading] = useState(true)
   const [selectedInterval, setSelectedInterval] = useState('1d')
+  const [intervalGesture, setIntervalGesture] = useState({ key: '1d', direction: 0 })
+  const [isChartRevealing, setIsChartRevealing] = useState(false)
+  const [chartReady, setChartReady] = useState(false)
   const [error, setError] = useState(null)
   const [useTestData, setUseTestData] = useState(false)
   
@@ -26,6 +35,19 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
     '1M': { period: '1y', yfInterval: '1mo' },
     '6M': { period: '6mo', yfInterval: '1d' },
     '1Y': { period: '1y', yfInterval: '1d' },
+  }
+  const intervalKeys = Object.keys(intervalMap)
+
+  const handleIntervalClick = (interval) => {
+    if (interval === selectedInterval) return
+    const currentIndex = intervalKeys.indexOf(selectedInterval)
+    const nextIndex = intervalKeys.indexOf(interval)
+    setIntervalGesture({
+      key: interval,
+      direction: nextIndex > currentIndex ? 1 : -1,
+    })
+    setIsChartRevealing(true)
+    setSelectedInterval(interval)
   }
 
   // Generate test data for debugging
@@ -132,6 +154,7 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
         })
         .filter(Boolean)
         .sort((a, b) => a.time - b.time)
+        .filter((item, index, array) => index === 0 || item.time !== array[index - 1].time)
 
       return formatted
     } catch (err) {
@@ -197,26 +220,14 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
 
         chartRef.current = chart
         seriesRef.current = candlestickSeries
+        setChartReady(true)
 
         console.log('[Chart] Chart created successfully')
         console.log('[Chart] Chart object:', chart)
         console.log('[Chart] Series object:', candlestickSeries)
         console.log('[Chart] Container children:', container.children.length)
 
-        // If we already have data, set it immediately
-        if (ohlcData.length > 0) {
-          console.log('[Chart] Setting existing data on chart...')
-          setTimeout(() => {
-            if (seriesRef.current && ohlcData.length > 0) {
-              const formatted = formatData(ohlcData)
-              if (formatted.length > 0) {
-                seriesRef.current.setData(formatted)
-                chart.timeScale().fitContent()
-                console.log('[Chart] Existing data set successfully')
-              }
-            }
-          }, 100)
-        }
+
 
         // Handle resize
         const handleResize = () => {
@@ -239,7 +250,7 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
         console.error('[Chart] Error stack:', err.stack)
         setError(`Chart error: ${err.message}`)
       }
-  }, [isModal, ohlcData.length, formatData])
+  }, [isModal])
 
   // Initialize chart - USING CALLBACK REF FOR BETTER TIMING
   useEffect(() => {
@@ -265,7 +276,7 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
 
       const rect = container.getBoundingClientRect()
       const width = rect.width || container.clientWidth || container.offsetWidth || 800
-      const height = isModal ? 600 : 500
+      const height = isModal ? TECHNICAL_CHART_MODAL_HEIGHT : TECHNICAL_CHART_HEIGHT
 
       console.log(`[Chart] Container dimensions: ${width}x${height}`)
       console.log(`[Chart] Container visible: ${rect.width > 0 && rect.height > 0}`)
@@ -282,8 +293,8 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
       createChartInstance(container, width, height)
     }
 
-    // For modals, wait longer to ensure modal is fully rendered
-    const initialDelay = isModal ? 1500 : 500
+    // Give the modal one paint frame, then initialize so the chart appears quickly.
+    const initialDelay = isModal ? 180 : 300
     const initTimer = setTimeout(initializeWhenReady, initialDelay)
 
     return () => {
@@ -296,16 +307,18 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
         }
         chartRef.current = null
         seriesRef.current = null
+        setChartReady(false)
       }
     }
   }, [symbol, isModal, createChartInstance])
 
   // Update chart data
   useEffect(() => {
-    if (!seriesRef.current || !chartRef.current) {
+    if (!chartReady || !seriesRef.current || !chartRef.current) {
       console.log('[Chart] Chart or series not ready:', {
         hasSeries: !!seriesRef.current,
         hasChart: !!chartRef.current,
+        chartReady,
         dataLength: ohlcData.length
       })
       return
@@ -334,6 +347,11 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
         setTimeout(() => {
           if (chartRef.current) {
             try {
+              const width = chartContainerRef.current?.getBoundingClientRect().width || chartContainerRef.current?.clientWidth || 800
+              chartRef.current.applyOptions({
+                width,
+                height: isModal ? TECHNICAL_CHART_MODAL_HEIGHT : TECHNICAL_CHART_HEIGHT,
+              })
               chartRef.current.timeScale().fitContent()
               console.log('[Chart] Chart fitted to content')
             } catch (e) {
@@ -341,6 +359,9 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
             }
           }
         }, 300)
+        setIsChartRevealing(true)
+        const revealTimer = window.setTimeout(() => setIsChartRevealing(false), CHART_REVEAL_DURATION_MS + 120)
+        return () => window.clearTimeout(revealTimer)
       } else {
         console.warn('[Chart] No valid data points after formatting')
         setError('No valid data points to display')
@@ -350,11 +371,37 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
       console.error('[Chart] Error stack:', err.stack)
       setError(`Data error: ${err.message}`)
     }
-  }, [ohlcData])
+  }, [ohlcData, chartReady, formatData, isModal])
+
+  const wrapModal = (children) => {
+    if (!isModal || !onClose) return children
+
+    return (
+      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.96 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="bg-white rounded-lg shadow-2xl max-w-5xl w-full max-h-[88vh] overflow-auto border border-gray-200"
+        >
+          <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex items-center justify-between z-10">
+            <h2 className="text-2xl font-bold text-gray-900">Candlestick Chart - {symbol}</h2>
+            <button
+              onClick={onClose}
+              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+              aria-label="Close candlestick chart"
+            >
+              <X className="w-6 h-6 text-gray-600" />
+            </button>
+          </div>
+          <div className="p-4">{children}</div>
+        </motion.div>
+      </div>
+    )
+  }
 
   // Loading state
-  if (loading) {
-    return (
+  if (loading && ohlcData.length === 0) {
+    return wrapModal(
       <div className={`bg-white rounded-lg p-6 border border-gray-200 shadow-md ${isModal ? 'w-full' : ''}`}>
         <div className="h-64 flex items-center justify-center">
           <div className="text-center">
@@ -368,7 +415,7 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
 
   // Error state
   if (error && !useTestData) {
-    return (
+    return wrapModal(
       <div className={`bg-white rounded-lg p-6 border border-gray-200 shadow-md ${isModal ? 'w-full' : ''}`}>
         <div className="text-center mb-4">
           <p className="text-red-600 font-semibold mb-2">Error Loading Chart Data</p>
@@ -421,16 +468,16 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
     <motion.div
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
-      className={`bg-white rounded-lg p-6 border border-gray-200 shadow-md ${isModal ? 'w-full' : ''}`}
+      className={`bg-white rounded-lg p-4 border border-gray-200 shadow-md ${isModal ? 'w-full' : ''}`}
     >
       {/* Header */}
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-4">
+      <div className="flex items-center justify-between mb-3 flex-wrap gap-3">
         <div>
           <h3 className="text-xl font-bold text-gray-900 mb-1">
             {symbol} • {market === 'IN' ? 'NSE' : 'NYSE'}
           </h3>
           <div className="flex items-center gap-4">
-            <p className="text-2xl font-bold text-gray-900">₹{currentPrice.toFixed(2)}</p>
+            <p className="text-xl font-bold text-gray-900">₹{currentPrice.toFixed(2)}</p>
             <div className={`flex items-center gap-1 ${change >= 0 ? 'text-green-600' : 'text-red-600'}`}>
               {change >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
               <span className="font-semibold">
@@ -441,54 +488,105 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
         </div>
 
         {/* Interval buttons */}
-        <div className="flex gap-2 flex-wrap items-center">
-          {Object.keys(intervalMap).map(interval => (
-            <button
-              key={interval}
-              onClick={() => setSelectedInterval(interval)}
-              className={`px-3 py-1 rounded-lg text-sm font-semibold transition-colors ${
-                selectedInterval === interval
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-              }`}
-            >
-              {interval.toUpperCase()}
-            </button>
-          ))}
-          {useTestData && (
-            <button
-              onClick={() => setUseTestData(false)}
-              className="px-3 py-1 rounded-lg text-sm font-semibold bg-yellow-600 text-white hover:bg-yellow-700"
-            >
-              Use Real Data
-            </button>
-          )}
-        </div>
+        <LayoutGroup id="candlestick-timeframes">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {intervalKeys.map(interval => (
+              <motion.button
+                key={interval}
+                type="button"
+                onClick={() => handleIntervalClick(interval)}
+                whileHover={{ y: -2, scale: selectedInterval === interval ? 1 : 1.03 }}
+                whileTap={{ scale: 0.88 }}
+                animate={selectedInterval === interval ? { scale: [1, 1.1, 1], y: [0, -3, 0] } : { scale: 1, y: 0 }}
+                transition={{ duration: 0.34, ease: 'easeOut' }}
+                className={`relative min-w-14 overflow-hidden rounded-xl px-3 py-1.5 text-sm font-semibold shadow-sm transition-colors ${
+                  selectedInterval === interval
+                    ? 'text-white'
+                    : 'text-gray-900'
+                }`}
+                style={{
+                  backgroundColor: selectedInterval === interval ? TIMEFRAME_ACTIVE_COLOR : TIMEFRAME_IDLE_COLOR,
+                }}
+              >
+                {selectedInterval === interval && (
+                  <>
+                    <motion.span
+                      layoutId="candlestick-active-interval"
+                      className="absolute inset-0 rounded-xl shadow-lg"
+                      style={{ backgroundColor: TIMEFRAME_ACTIVE_COLOR, boxShadow: '0 10px 22px rgba(50, 39, 127, 0.24)' }}
+                      transition={{ type: 'spring', stiffness: 320, damping: 24, mass: 0.8 }}
+                    />
+                    <motion.span
+                      key={`candlestick-ripple-${intervalGesture.key}`}
+                      className="absolute left-1/2 top-1/2 h-9 w-9 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white/45"
+                      initial={{ opacity: 0.8, scale: 0.15 }}
+                      animate={{ opacity: 0, scale: 2.7 }}
+                      transition={{ duration: 0.55, ease: 'easeOut' }}
+                    />
+                    <motion.span
+                      key={`candlestick-ring-${intervalGesture.key}`}
+                      className="absolute inset-0 rounded-xl border-2 border-white/65"
+                      initial={{ opacity: 0.9, scale: 0.86 }}
+                      animate={{ opacity: 0, scale: 1.28 }}
+                      transition={{ duration: 0.5, ease: 'easeOut' }}
+                    />
+                  </>
+                )}
+                <span className="relative z-10">{interval.toUpperCase()}</span>
+              </motion.button>
+            ))}
+            {useTestData && (
+              <button
+                onClick={() => setUseTestData(false)}
+                className="px-3 py-1 rounded-lg text-sm font-semibold bg-yellow-600 text-white hover:bg-yellow-700"
+              >
+                Use Real Data
+              </button>
+            )}
+          </div>
+        </LayoutGroup>
       </div>
 
       {/* Chart container - CRITICAL: Must have explicit dimensions and be visible */}
-      <div
-        ref={chartContainerRef}
-        id={`chart-container-${symbol}`}
-        className="w-full"
-        style={{
-          width: '100%',
-          height: isModal ? '600px' : '500px',
-          minHeight: isModal ? '600px' : '500px',
-          backgroundColor: '#ffffff',
-          position: 'relative',
-          overflow: 'hidden',
-          display: 'block',
-          visibility: 'visible',
-          border: '1px solid #e5e7eb',
-        }}
-      >
-        {!chartRef.current && !loading && (
-          <div className="absolute inset-0 flex items-center justify-center text-gray-600">
-            <div className="text-center">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>
-              <p>Initializing chart...</p>
+      <div className="relative">
+        <div
+          ref={chartContainerRef}
+          id={`chart-container-${symbol}`}
+          className="w-full"
+          style={{
+            width: '100%',
+            height: isModal ? `${TECHNICAL_CHART_MODAL_HEIGHT}px` : `${TECHNICAL_CHART_HEIGHT}px`,
+            minHeight: isModal ? `${TECHNICAL_CHART_MODAL_HEIGHT}px` : `${TECHNICAL_CHART_HEIGHT}px`,
+            backgroundColor: '#ffffff',
+            position: 'relative',
+            overflow: 'hidden',
+            display: 'block',
+            visibility: 'visible',
+            border: '1px solid #e5e7eb',
+          }}
+        >
+          {!chartRef.current && !loading && (
+            <div className="absolute inset-0 flex items-center justify-center text-gray-600">
+              <div className="text-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto mb-2"></div>
+                <p>Initializing chart...</p>
+              </div>
             </div>
+          )}
+        </div>
+        {isChartRevealing && (
+          <motion.div
+            key={`candlestick-chart-reveal-${intervalGesture.key}`}
+            className="pointer-events-none absolute right-0 top-0 z-10 bg-white"
+            style={{ bottom: '42px' }}
+            initial={{ width: '100%' }}
+            animate={{ width: '0%' }}
+            transition={{ duration: CHART_REVEAL_DURATION_MS / 1000, ease: [0.22, 1, 0.36, 1] }}
+          />
+        )}
+        {loading && ohlcData.length > 0 && (
+          <div className="pointer-events-none absolute right-4 top-4 z-20 rounded-full bg-white/90 px-3 py-1.5 text-xs font-semibold text-gray-600 shadow">
+            Updating timeframe...
           </div>
         )}
       </div>
@@ -507,31 +605,7 @@ const CandlestickChart = ({ symbol, market = 'US', onClose, isModal = false }) =
     </motion.div>
   )
 
-  // Modal wrapper
-  if (isModal && onClose) {
-    return (
-      <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          className="bg-white rounded-lg shadow-2xl max-w-7xl w-full max-h-[90vh] overflow-auto border border-gray-200"
-        >
-          <div className="sticky top-0 bg-white border-b border-gray-200 p-4 flex items-center justify-between z-10">
-            <h2 className="text-2xl font-bold text-gray-900">Candlestick Chart - {symbol}</h2>
-            <button
-              onClick={onClose}
-              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-            >
-              <X className="w-6 h-6 text-gray-600" />
-            </button>
-          </div>
-          <div className="p-6">{content}</div>
-        </motion.div>
-      </div>
-    )
-  }
-
-  return content
+  return wrapModal(content)
 }
 
 export default CandlestickChart

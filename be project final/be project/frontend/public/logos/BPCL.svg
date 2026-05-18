@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 360" role="img" aria-labelledby="title">
+  <title id="title">Bharat Petroleum logo</title>
+  <rect width="320" height="360" fill="#ffffff"/>
+  <rect x="35" y="28" width="250" height="300" fill="#ffd900"/>
+  <rect x="43" y="36" width="234" height="186" fill="#ffffff"/>
+  <circle cx="160" cy="134" r="76" fill="#0886c9"/>
+  <circle cx="160" cy="134" r="54" fill="#ffffff"/>
+  <circle cx="160" cy="134" r="46" fill="#0886c9"/>
+  <path
+    d="M148 94c16-10 39-8 55 3c-25 1-35 13-36 33c-1 21-16 40-40 40c-14 0-27-6-35-17c21 3 34-5 36-25c2-15 7-26 20-34z"
+    fill="#ffdf00"
+  />
+  <path
+    d="M179 116c14-3 29 6 32 22c4 19-9 35-27 38c-10 2-20-1-28-7c19-4 29-16 30-36c0-7-2-12-7-17z"
+    fill="#ffdf00"
+  />
+  <text
+    x="160"
+    y="270"
+    text-anchor="middle"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="42"
+    font-weight="900"
+    fill="#0786c8"
+  >Bharat</text>
+  <text
+    x="160"
+    y="318"
+    text-anchor="middle"
+    font-family="Arial, Helvetica, sans-serif"
+    font-size="42"
+    font-weight="900"
+    fill="#0786c8"
+  >Petroleum</text>
+  <rect x="35" y="328" width="250" height="24" fill="#0786c8"/>
+</svg>

@@ -13,16 +13,7 @@ import {
   CheckCircle2
 } from 'lucide-react'
 import RecommendationCard from './RecommendationCard'
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  Legend,
-  ResponsiveContainer
-} from 'recharts'
+import StockPriceChart from './StockPriceChart'
 
 const normalizeRecommendationLabel = (value) => {
   const normalized = String(value || '').trim().toUpperCase()
@@ -43,7 +34,7 @@ const getModelFallbackRecommendation = (signal, expectedReturn, risk, confidence
   return 'HOLD'
 }
 
-const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPeriod, market, recommendation, onClose }) => {
+const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPeriod, market, recommendation, priceHistory, onClose }) => {
   if (!analysis || !analysis.success) return null
 
   const report = analysis.report || {}
@@ -110,16 +101,7 @@ const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPer
     alternate_action: report.alternate_action || (prediction.signal === 'Down' ? 'Avoid fresh entry; if already holding, consider SELL/EXIT.' : null)
   }
 
-  const chartData = []
-  for (let day = 0; day <= safeInvestmentPeriod; day += Math.max(1, Math.floor(safeInvestmentPeriod / 20))) {
-    const progress = day / safeInvestmentPeriod
-    const projectedPrice = currentPrice + (priceChange * progress)
-    chartData.push({
-      day,
-      price: projectedPrice,
-      value: shares * projectedPrice
-    })
-  }
+
 
   return (
     <motion.div
@@ -213,35 +195,16 @@ const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPer
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="bg-gray-50 rounded-lg p-6 border border-gray-200">
             <h3 className="text-lg font-semibold mb-4 text-gray-900">Price Projection Over {safeInvestmentPeriod} Days</h3>
             {hasValidPrice ? (
-              <ResponsiveContainer width="100%" height={400}>
-                <AreaChart data={chartData}>
-                  <defs>
-                    <linearGradient id="colorPrice" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
-                    </linearGradient>
-                    <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                  <XAxis dataKey="day" stroke="#6b7280" />
-                  <YAxis yAxisId="left" stroke="#6b7280" />
-                  <YAxis yAxisId="right" orientation="right" stroke="#6b7280" />
-                  <Tooltip
-                    contentStyle={{ backgroundColor: '#ffffff', border: '1px solid #e5e7eb', borderRadius: '8px', color: '#374151' }}
-                    formatter={(value, name) => {
-                      if (name === 'price') return [currency(value), 'Price']
-                      if (name === 'value') return [currency(value), 'Portfolio Value']
-                      return [value, name]
-                    }}
-                  />
-                  <Legend />
-                  <Area yAxisId="left" type="monotone" dataKey="price" stroke="#3b82f6" fillOpacity={1} fill="url(#colorPrice)" name="Stock Price" />
-                  <Area yAxisId="right" type="monotone" dataKey="value" stroke="#10b981" fillOpacity={1} fill="url(#colorValue)" name="Portfolio Value" />
-                </AreaChart>
-              </ResponsiveContainer>
+              <StockPriceChart
+                symbol={symbol}
+                currentPrice={currentPrice}
+                market={effectiveMarket}
+                compact={true}
+                projection={{
+                  predictedPrice,
+                  investmentPeriod: safeInvestmentPeriod
+                }}
+              />
             ) : (
               <div className="h-[220px] flex items-center justify-center rounded-lg border border-dashed border-gray-300 text-sm text-gray-500">
                 Price projection is unavailable because the latest stock price could not be loaded.

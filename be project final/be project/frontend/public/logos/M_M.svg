@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 420" role="img" aria-labelledby="title desc">
+  <title id="title">Mahindra logo</title>
+  <desc id="desc">Stylized Mahindra twin peak mark above the Mahindra wordmark.</desc>
+  <rect width="640" height="420" fill="#fff"/>
+  <g transform="translate(70 20)">
+    <path d="M0 0 230 164 142 365Z" fill="#3f3d39"/>
+    <path d="M84 83 230 164 142 365 85 205Z" fill="#a9a49d"/>
+    <path d="M0 0 84 83 142 365 52 350Z" fill="#6d6963"/>
+    <path d="M230 164 142 365 190 315Z" fill="#5d5853"/>
+    <path d="M500 0 270 164 358 365Z" fill="#3f3d39"/>
+    <path d="M416 83 270 164 358 365 415 205Z" fill="#a9a49d"/>
+    <path d="M500 0 416 83 358 365 448 350Z" fill="#6d6963"/>
+    <path d="M270 164 358 365 310 315Z" fill="#5d5853"/>
+    <path d="M230 164 250 148 270 164 250 187Z" fill="#f7f7f5"/>
+  </g>
+  <text x="320" y="393" text-anchor="middle"
+        font-family="Arial Black, Eurostile, Arial, sans-serif"
+        font-size="68" font-weight="900" letter-spacing="-5" fill="#050505">
+    mahindra
+  </text>
+</svg>

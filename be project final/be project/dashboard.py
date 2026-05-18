@@ -215,6 +215,124 @@ def display_predictions(ecosystem):
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 
+def format_inr(number):
+    """Format a number in Indian Rupee format"""
+    s, *d = str(int(number)).partition(".")
+    r = ",".join([s[x-2:x] for x in range(-3, -len(s), -2)][::-1] + [s[-3:]])
+    return f"₹{r}"
+
+def display_sip_calculator():
+    """Display SIP and Lumpsum Calculator"""
+    st.subheader("💰 Investment Calculator")
+    
+    # Custom CSS for calculator
+    st.markdown("""
+        <style>
+        .calc-result-row {
+            display: flex; 
+            justify-content: space-between; 
+            margin-bottom: 12px; 
+            color: #666;
+            font-size: 1.1rem;
+        }
+        .calc-result-val {
+            color: #333; 
+            font-weight: 600;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+    
+    calc_type = st.radio("Calculator Type", ["SIP", "Lumpsum"], horizontal=True, label_visibility="collapsed")
+    
+    st.write("") # Spacing
+    
+    col1, col2 = st.columns([1.2, 1], gap="large")
+    
+    with col1:
+        st.markdown("<br>", unsafe_allow_html=True)
+        if calc_type == "SIP":
+            monthly_inv = st.slider("Monthly investment", min_value=500, max_value=100000, value=25000, step=500, format="₹%d")
+            rate = st.slider("Expected return rate (p.a)", min_value=1.0, max_value=30.0, value=12.0, step=0.1, format="%.1f%%")
+            time_period = st.slider("Time period", min_value=1, max_value=40, value=10, step=1, format="%d Yr")
+            
+            # SIP Calculation
+            # M = P * ({[1 + i]^n - 1} / i) * (1 + i)
+            P = monthly_inv
+            i = rate / 100 / 12
+            n = time_period * 12
+            
+            invested_amount = P * n
+            total_value = P * (((1 + i)**n - 1) / i) * (1 + i)
+            est_returns = total_value - invested_amount
+            
+        else: # Lumpsum
+            total_inv = st.slider("Total investment", min_value=500, max_value=10000000, value=100000, step=1000, format="₹%d")
+            rate = st.slider("Expected return rate (p.a)", min_value=1.0, max_value=30.0, value=12.0, step=0.1, format="%.1f%%")
+            time_period = st.slider("Time period", min_value=1, max_value=40, value=10, step=1, format="%d Yr")
+            
+            # Lumpsum Calculation
+            invested_amount = total_inv
+            total_value = invested_amount * ((1 + rate/100) ** time_period)
+            est_returns = total_value - invested_amount
+            
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # Display the results
+        st.markdown(f"""
+        <div class="calc-result-row">
+            <span>Invested amount</span>
+            <span class="calc-result-val">{format_inr(invested_amount)}</span>
+        </div>
+        <div class="calc-result-row">
+            <span>Est. returns</span>
+            <span class="calc-result-val">{format_inr(est_returns)}</span>
+        </div>
+        <div class="calc-result-row" style="margin-top: 15px;">
+            <span>Total value</span>
+            <span class="calc-result-val" style="font-size: 1.2rem;">{format_inr(total_value)}</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with col2:
+        # Donut Chart
+        labels = ['Invested amount', 'Est. returns']
+        values = [invested_amount, est_returns]
+        colors = ['#e8eaf6', '#5c6bc0'] # Light purple/gray and nice blue/purple
+        
+        fig = go.Figure(data=[go.Pie(labels=labels, values=values, hole=.7, 
+                                     marker_colors=colors, textinfo='none', hoverinfo='label+value')])
+        fig.update_layout(
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="center", x=0.5),
+            margin=dict(t=30, b=0, l=0, r=0),
+            height=280
+        )
+        st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+        
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        # Add custom styling to make the button green like the image
+        st.markdown("""
+        <style>
+        div[data-testid="stButton"] > button {
+            background-color: #00bfa5;
+            color: white;
+            border: none;
+            padding: 10px 24px;
+            font-weight: bold;
+            border-radius: 6px;
+        }
+        div[data-testid="stButton"] > button:hover {
+            background-color: #00a892;
+            color: white;
+        }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        if st.button("INVEST NOW", use_container_width=True):
+            st.success("Investment feature coming soon!")
+
+
 def display_portfolio_holdings(ecosystem):
     """Display current portfolio holdings"""
     st.subheader("💼 Portfolio Holdings")
@@ -306,7 +424,7 @@ def main():
             st.text(ecosystem.auditor.generate_report(performance))
     
     # Main content
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "💼 Portfolio", "📈 Predictions", "📋 Reports"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Dashboard", "💰 SIP Calculator", "📈 Predictions", "📋 Reports"])
     
     with tab1:
         st.header("Performance Overview")
@@ -337,28 +455,7 @@ def main():
             display_trade_history(ecosystem)
     
     with tab2:
-        display_portfolio_holdings(ecosystem)
-        
-        st.divider()
-        
-        # Portfolio allocation chart
-        portfolio = ecosystem.trader.get_portfolio()
-        current_prices = ecosystem.get_current_prices()
-        
-        if portfolio:
-            allocation_data = []
-            for symbol, shares in portfolio.items():
-                price = current_prices.get(symbol, 0)
-                value = shares * price
-                allocation_data.append({
-                    'Symbol': symbol,
-                    'Value': value
-                })
-            
-            if allocation_data:
-                df = pd.DataFrame(allocation_data)
-                fig = px.pie(df, values='Value', names='Symbol', title='Portfolio Allocation')
-                st.plotly_chart(fig, use_container_width=True)
+        display_sip_calculator()
     
     with tab3:
         display_predictions(ecosystem)

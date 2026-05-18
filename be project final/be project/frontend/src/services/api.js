@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { getCompanyMeta, getRemoteLogoUrl } from '../utils/logoMapper'
 
 const DEFAULT_LOCAL_API_URL = 'http://localhost:8000'
 const API_BASE_URL = import.meta.env.VITE_API_URL || DEFAULT_LOCAL_API_URL
@@ -344,24 +345,26 @@ export const getCompanyInfo = async (symbol, market = 'US') => {
   try {
     const response = await api.get(`/api/company-info/${symbol}`, {
       params: { market },
-      timeout: 15000 // 15 second timeout
+      timeout: 5000
     })
     return response.data
   } catch (error) {
     console.error('[API] Error fetching company info:', error)
+    const meta = getCompanyMeta(symbol)
     // Return minimal data instead of throwing
     return {
       success: true,
       symbol: symbol,
       fetch_symbol: symbol,
-      company_name: symbol,
+      company_name: meta?.name || symbol,
       sector: null,
       industry: null,
       market_cap: null,
       pe_ratio: null,
-      logo_url: null,
+      financial_ratios: {},
+      logo_url: getRemoteLogoUrl(symbol),
       description: null,
-      website: null,
+      website: meta?.website || null,
       market: market
     }
   }
@@ -425,6 +428,19 @@ export const createRealtimePriceConnection = (symbols, market = 'US', interval =
   }
   
   return ws
+}
+
+// Get shareholding pattern
+export const getShareholdingPattern = async (symbol, market = 'US') => {
+  try {
+    const response = await api.get(`/api/shareholding/${symbol}`, {
+      params: { market }
+    })
+    return response.data
+  } catch (error) {
+    console.error(`[API] Error fetching shareholding pattern for ${symbol}:`, error)
+    return null
+  }
 }
 
 export default api

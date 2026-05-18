@@ -16,3 +16,20 @@ code {
     monospace;
 }
 
+.market-ticker-track {
+  animation: market-ticker-scroll 34s linear infinite;
+}
+
+.market-ticker-track:hover {
+  animation-play-state: paused;
+}
+
+@keyframes market-ticker-scroll {
+  from {
+    transform: translateX(0);
+  }
+
+  to {
+    transform: translateX(-50%);
+  }
+}
