@@ -2,10 +2,20 @@ import axios from 'axios'
 import { getCompanyMeta, getRemoteLogoUrl } from '../utils/logoMapper'
 
 const DEFAULT_LOCAL_API_URL = 'http://localhost:8000'
-const API_BASE_URL = import.meta.env.VITE_API_URL || DEFAULT_LOCAL_API_URL
+const IS_PRODUCTION = import.meta.env.PROD
+const API_BASE_URL = import.meta.env.VITE_API_URL || (IS_PRODUCTION ? '' : DEFAULT_LOCAL_API_URL)
 const BACKEND_DISPLAY_URL = API_BASE_URL
+const DEFAULT_TIMEOUT = IS_PRODUCTION ? 6000 : 30000
+const FAST_TIMEOUT = IS_PRODUCTION ? 2500 : 10000
+const DATA_TIMEOUT = IS_PRODUCTION ? 5000 : 15000
+const quoteCache = new Map()
+const QUOTE_CACHE_TTL_MS = IS_PRODUCTION ? 60000 : 15000
 const getRealtimeWebSocketUrl = () => {
   try {
+    if (!API_BASE_URL && typeof window !== 'undefined') {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      return `${protocol}//${window.location.host}/ws/realtime-prices`
+    }
     const normalized = new URL(API_BASE_URL)
     const protocol = normalized.protocol === 'https:' ? 'wss:' : 'ws:'
     return `${protocol}//${normalized.host}/ws/realtime-prices`
@@ -19,7 +29,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 30000, // 30 second timeout for initialization
+  timeout: DEFAULT_TIMEOUT,
 })
 
 // Add request interceptor for debugging
@@ -53,9 +63,7 @@ export const initializeEcosystem = async (symbols = ['AAPL', 'TSLA', 'MSFT', 'GO
     const response = await api.post('/api/initialize', {
       symbols,
       initial_capital: initialCapital,
-    }, {
-      timeout: 120000 // 2 minutes timeout for initialization (it can take time)
-    })
+    }, { timeout: IS_PRODUCTION ? 8000 : 120000 })
     console.log('[API] Ecosystem initialization response:', response.data)
     return response.data
   } catch (error) {
@@ -69,13 +77,13 @@ export const initializeEcosystem = async (symbols = ['AAPL', 'TSLA', 'MSFT', 'GO
 
 // Get status with better error handling
 export const getStatus = async () => {
-  const maxAttempts = 2
+  const maxAttempts = IS_PRODUCTION ? 1 : 2
   let lastError
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       console.log(`[API] Checking backend status... (attempt ${attempt}/${maxAttempts})`)
-      const response = await api.get('/api/status', { timeout: 60000 })
+      const response = await api.get('/api/status', { timeout: FAST_TIMEOUT })
       console.log('[API] Status response:', response.data)
       return response.data
     } catch (error) {
@@ -250,11 +258,18 @@ export const getOHLCData = async (symbol, period = '1mo', interval = '1d', marke
 
 // Get real-time price
 export const getRealtimePrice = async (symbol, market = 'US') => {
+  const cacheKey = `${market}:${symbol}`.toUpperCase()
+  const cached = quoteCache.get(cacheKey)
+  if (cached && Date.now() - cached.timestamp < QUOTE_CACHE_TTL_MS) {
+    return cached.payload
+  }
+
   try {
     const response = await api.get(`/api/realtime-price/${symbol}`, {
       params: { market },
-      timeout: 10000
+      timeout: FAST_TIMEOUT
     })
+    quoteCache.set(cacheKey, { timestamp: Date.now(), payload: response.data })
     return response.data
   } catch (error) {
     console.warn('[API] Error fetching real-time price:', error)
@@ -273,7 +288,7 @@ export const getRecommendation = async (symbol, market = 'US') => {
   try {
     const response = await api.get(`/api/recommend/${symbol}`, {
       params: { market },
-      timeout: 15000 // 15 second timeout
+      timeout: DATA_TIMEOUT
     })
     return response.data
   } catch (error) {
@@ -299,7 +314,7 @@ export const getSearchSummary = async (symbol, market = 'US') => {
   try {
     const response = await api.get(`/api/search-summary/${symbol}`, {
       params: { market },
-      timeout: 12000
+      timeout: DATA_TIMEOUT
     })
     return response.data
   } catch (error) {
@@ -321,7 +336,7 @@ export const getNewsSentiment = async (symbol, market = 'US', refresh = false) =
   try {
     const response = await api.get(`/api/news-sentiment/${symbol}`, {
       params: { market, refresh },
-      timeout: 15000
+      timeout: DATA_TIMEOUT
     })
     return response.data
   } catch (error) {
@@ -345,7 +360,7 @@ export const getCompanyInfo = async (symbol, market = 'US') => {
   try {
     const response = await api.get(`/api/company-info/${symbol}`, {
       params: { market },
-      timeout: 5000
+      timeout: FAST_TIMEOUT
     })
     return response.data
   } catch (error) {
@@ -444,4 +459,4 @@ export const getShareholdingPattern = async (symbol, market = 'US') => {
 }
 
 export default api
-export { API_BASE_URL, BACKEND_DISPLAY_URL }
+export { API_BASE_URL, BACKEND_DISPLAY_URL, IS_PRODUCTION }

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { Toaster } from 'react-hot-toast'
 import { ExternalLink } from 'lucide-react'
 import StockScreener from './components/StockScreener'
-import { initializeEcosystem, getRealtimePrice } from './services/api'
+import { initializeEcosystem, getRealtimePrice, IS_PRODUCTION } from './services/api'
 
 const MARKET_TICKER_ITEMS = [
   { symbol: 'BAJAJFINSV', price: 1794.6, change: 1.37, sourceUrl: 'https://dhan.co/stocks/bajaj-finserv-ltd-chart/' },
@@ -58,10 +58,12 @@ const MarketTicker = () => {
       )))
     }
 
-    refreshTickerPrices()
-    const intervalId = window.setInterval(refreshTickerPrices, 30000)
+    const refreshDelay = IS_PRODUCTION ? 3000 : 0
+    const refreshTimer = window.setTimeout(refreshTickerPrices, refreshDelay)
+    const intervalId = window.setInterval(refreshTickerPrices, IS_PRODUCTION ? 120000 : 30000)
     return () => {
       isMounted = false
+      window.clearTimeout(refreshTimer)
       window.clearInterval(intervalId)
     }
   }, [])
@@ -104,8 +106,13 @@ function App() {
     // Set document title
     document.title = 'Equisense - Stock Screener & Investment Analyzer'
     
-    // Try to initialize ecosystem in background (non-blocking)
+    // Try to initialize ecosystem in background locally. On Vercel this is intentionally
+    // skipped so the first paint is not delayed by serverless cold starts or missing APIs.
     const init = async () => {
+      if (IS_PRODUCTION && !import.meta.env.VITE_ENABLE_STARTUP_INIT) {
+        console.log('Skipping startup ecosystem initialization in production')
+        return
+      }
       try {
         console.log('Attempting to initialize ecosystem...')
         const result = await initializeEcosystem()
@@ -122,8 +129,8 @@ function App() {
       }
     }
     
-    // Initialize in background without blocking
-    init()
+    const timer = window.setTimeout(init, IS_PRODUCTION ? 5000 : 0)
+    return () => window.clearTimeout(timer)
   }, [])
 
   return (

@@ -47,7 +47,8 @@ import {
   getRecommendation,
   getPortfolio,
   addWatchlistItem,
-  BACKEND_DISPLAY_URL
+  BACKEND_DISPLAY_URL,
+  IS_PRODUCTION
 } from '../services/api'
 import StockAnalysisReport from './StockAnalysisReport'
 import HistoricalAnalysis from './HistoricalAnalysis'
@@ -772,7 +773,7 @@ const StockScreener = () => {
   const [showChart, setShowChart] = useState(false)
   const [selectedChartSymbol, setSelectedChartSymbol] = useState(null)
   const [selectedStockForAnalysis, setSelectedStockForAnalysis] = useState(null)
-  const [backendStatus, setBackendStatus] = useState({ connected: false, checking: true, initialized: false })
+  const [backendStatus, setBackendStatus] = useState({ connected: false, checking: !IS_PRODUCTION, initialized: false })
   const [selectedStockData, setSelectedStockData] = useState(null) // Store detailed stock data for display
   const [showStockModal, setShowStockModal] = useState(false)
   const [priceHistory, setPriceHistory] = useState([])
@@ -793,7 +794,7 @@ const StockScreener = () => {
   const [activeMarketTool, setActiveMarketTool] = useState(null)
   const [marketIndices, setMarketIndices] = useState(MARKET_INDEX_FALLBACKS)
   const [marketMoverQuotes, setMarketMoverQuotes] = useState({})
-  const [marketMoversLoading, setMarketMoversLoading] = useState(true)
+  const [marketMoversLoading, setMarketMoversLoading] = useState(!IS_PRODUCTION)
   const [marketMoversUpdatedAt, setMarketMoversUpdatedAt] = useState('')
   const activeSearchRequestRef = useRef(0)
 
@@ -808,10 +809,13 @@ const StockScreener = () => {
       }
     }
 
-    checkBackend()
+    const timer = window.setTimeout(checkBackend, IS_PRODUCTION ? 2500 : 0)
     // Check every 30 seconds
-    const interval = setInterval(checkBackend, 30000)
-    return () => clearInterval(interval)
+    const interval = setInterval(checkBackend, IS_PRODUCTION ? 120000 : 30000)
+    return () => {
+      window.clearTimeout(timer)
+      clearInterval(interval)
+    }
   }, [])
 
   useEffect(() => {
@@ -834,10 +838,11 @@ const StockScreener = () => {
       )))
     }
 
-    loadMarketIndices()
-    const interval = window.setInterval(loadMarketIndices, 60000)
+    const timer = window.setTimeout(loadMarketIndices, IS_PRODUCTION ? 2000 : 0)
+    const interval = window.setInterval(loadMarketIndices, IS_PRODUCTION ? 180000 : 60000)
     return () => {
       isMounted = false
+      window.clearTimeout(timer)
       window.clearInterval(interval)
     }
   }, [])
@@ -874,10 +879,11 @@ const StockScreener = () => {
       setMarketMoversLoading(false)
     }
 
-    loadMarketMovers()
-    const interval = window.setInterval(loadMarketMovers, 45000)
+    const timer = window.setTimeout(loadMarketMovers, IS_PRODUCTION ? 3500 : 0)
+    const interval = window.setInterval(loadMarketMovers, IS_PRODUCTION ? 180000 : 45000)
     return () => {
       isMounted = false
+      window.clearTimeout(timer)
       window.clearInterval(interval)
     }
   }, [])
@@ -2126,7 +2132,7 @@ const StockScreener = () => {
               <p className="text-yellow-800 font-semibold mb-1">Backend server not reachable</p>
               <p className="text-yellow-700 text-sm">
                 The frontend could not reach <code className="bg-yellow-100 px-1 rounded">{BACKEND_DISPLAY_URL}</code>.
-                If this is a deployed app, wait a few seconds for the backend to wake up and refresh once.
+                If this is a deployed app, set <code className="bg-yellow-100 px-1 rounded">VITE_API_URL</code> to your backend URL or wait a few seconds for the backend to wake up.
               </p>
             </div>
           )}
