@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react'
+import React, { Suspense, lazy, useEffect, useState } from 'react'
 import { Toaster } from 'react-hot-toast'
 import { ExternalLink } from 'lucide-react'
-import StockScreener from './components/StockScreener'
 import { initializeEcosystem, getRealtimePrice, IS_PRODUCTION } from './services/api'
+
+const StockScreener = lazy(() => import('./components/StockScreener'))
 
 const MARKET_TICKER_ITEMS = [
   { symbol: 'BAJAJFINSV', price: 1794.6, change: 1.37, sourceUrl: 'https://dhan.co/stocks/bajaj-finserv-ltd-chart/' },
@@ -101,16 +102,30 @@ const MarketTicker = () => {
   )
 }
 
+const AppLoadingState = () => (
+  <main className="min-h-[calc(100vh-56px)] bg-[#f6f9ff] px-4 py-6">
+    <div className="mx-auto flex max-w-7xl flex-col gap-4">
+      <div className="h-10 w-56 animate-pulse rounded bg-slate-200" />
+      <div className="h-12 w-full animate-pulse rounded border border-slate-200 bg-white" />
+      <div className="grid gap-4 md:grid-cols-3">
+        <div className="h-28 animate-pulse rounded border border-slate-200 bg-white" />
+        <div className="h-28 animate-pulse rounded border border-slate-200 bg-white" />
+        <div className="h-28 animate-pulse rounded border border-slate-200 bg-white" />
+      </div>
+    </div>
+  </main>
+)
+
 function App() {
   useEffect(() => {
     // Set document title
     document.title = 'Equisense - Stock Screener & Investment Analyzer'
     
-    // Try to initialize ecosystem in background locally. On Vercel this is intentionally
-    // skipped so the first paint is not delayed by serverless cold starts or missing APIs.
+    // Keep first paint fast. The backend now lazy-loads expensive analysis components
+    // when a stock actually needs them.
     const init = async () => {
-      if (IS_PRODUCTION && !import.meta.env.VITE_ENABLE_STARTUP_INIT) {
-        console.log('Skipping startup ecosystem initialization in production')
+      if (!import.meta.env.VITE_ENABLE_STARTUP_INIT) {
+        console.log('Skipping startup ecosystem initialization')
         return
       }
       try {
@@ -129,7 +144,7 @@ function App() {
       }
     }
     
-    const timer = window.setTimeout(init, IS_PRODUCTION ? 5000 : 0)
+    const timer = window.setTimeout(init, IS_PRODUCTION ? 5000 : 500)
     return () => window.clearTimeout(timer)
   }, [])
 
@@ -146,7 +161,9 @@ function App() {
         }}
       />
       <MarketTicker />
-      <StockScreener />
+      <Suspense fallback={<AppLoadingState />}>
+        <StockScreener />
+      </Suspense>
     </div>
   )
 }

@@ -437,6 +437,102 @@ class DatabaseManager:
         except Exception as exc:
             return {"success": False, "message": str(exc)}
 
+    def get_cached_response(self, cache_key: str, allow_stale: bool = False) -> dict:
+        if not self.settings.is_configured:
+            return {"success": False, "message": "Database is not configured.", "payload": None}
+
+        try:
+            import psycopg
+
+            stale_filter = "" if allow_stale else "and expires_at > timezone('utc', now())"
+            query = f"""
+                select payload, stored_at, expires_at, source
+                from public.api_response_cache
+                where cache_key = %s
+                {stale_filter}
+                limit 1
+            """
+
+            with psycopg.connect(
+                self.settings.effective_url,
+                connect_timeout=3,
+                sslmode=self.settings.ssl_mode,
+            ) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(query, (cache_key,))
+                    row = cur.fetchone()
+
+            if not row:
+                return {"success": False, "payload": None}
+
+            payload = row[0]
+            if isinstance(payload, str):
+                payload = json.loads(payload)
+
+            return {
+                "success": True,
+                "payload": self._make_json_safe(payload),
+                "stored_at": row[1].isoformat() if hasattr(row[1], "isoformat") else str(row[1]),
+                "expires_at": row[2].isoformat() if hasattr(row[2], "isoformat") else str(row[2]),
+                "source": row[3],
+            }
+        except Exception as exc:
+            return {"success": False, "message": str(exc), "payload": None}
+
+    def set_cached_response(self, cache_key: str, namespace: str, payload: dict, ttl_seconds: int) -> dict:
+        if not self.settings.is_configured:
+            return {"success": False, "message": "Database is not configured."}
+
+        try:
+            import psycopg
+
+            with psycopg.connect(
+                self.settings.effective_url,
+                connect_timeout=3,
+                sslmode=self.settings.ssl_mode,
+            ) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        insert into public.api_response_cache (
+                            cache_key,
+                            namespace,
+                            payload,
+                            ttl_seconds,
+                            stored_at,
+                            expires_at,
+                            source
+                        )
+                        values (
+                            %(cache_key)s,
+                            %(namespace)s,
+                            %(payload)s::jsonb,
+                            %(ttl_seconds)s,
+                            timezone('utc', now()),
+                            timezone('utc', now()) + (%(ttl_seconds)s || ' seconds')::interval,
+                            'live_fetch'
+                        )
+                        on conflict (cache_key) do update set
+                            namespace = excluded.namespace,
+                            payload = excluded.payload,
+                            ttl_seconds = excluded.ttl_seconds,
+                            stored_at = excluded.stored_at,
+                            expires_at = excluded.expires_at,
+                            source = excluded.source
+                        """,
+                        {
+                            "cache_key": cache_key,
+                            "namespace": namespace,
+                            "payload": json.dumps(self._make_json_safe(payload)),
+                            "ttl_seconds": max(1, int(ttl_seconds)),
+                        },
+                    )
+                conn.commit()
+
+            return {"success": True}
+        except Exception as exc:
+            return {"success": False, "message": str(exc)}
+
     def _make_json_safe(self, value: Any) -> Any:
         if isinstance(value, dict):
             return {str(key): self._make_json_safe(item) for key, item in value.items()}

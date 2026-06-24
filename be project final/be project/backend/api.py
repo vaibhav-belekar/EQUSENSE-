@@ -97,6 +97,10 @@ CACHE_TTLS = {
     "search_summary": 45,
 }
 
+ENABLE_PERSISTENT_CACHE = os.getenv("ENABLE_PERSISTENT_CACHE", "true").strip().lower() not in ("0", "false", "no")
+ALLOW_STALE_CACHE_ON_ERROR = os.getenv("ALLOW_STALE_CACHE_ON_ERROR", "true").strip().lower() not in ("0", "false", "no")
+PRELOAD_ECOSYSTEM_ON_STARTUP = os.getenv("PRELOAD_ECOSYSTEM_ON_STARTUP", "false").strip().lower() in ("1", "true", "yes")
+
 DHAN_STOCK_SLUGS = {
     "ADANIENT": "adani-enterprises-ltd",
     "ADANIPORTS": "adani-ports-special-economic-zone-ltd",
@@ -267,27 +271,78 @@ def build_cache_key(namespace: str, *parts) -> str:
 def get_cached_response(cache_key: str):
     cached = response_cache.get(cache_key)
     if not cached:
+        if ENABLE_PERSISTENT_CACHE:
+            persisted = database_manager.get_cached_response(cache_key)
+            if persisted.get("success") and persisted.get("payload") is not None:
+                payload = copy.deepcopy(persisted["payload"])
+                if isinstance(payload, dict):
+                    payload["cached"] = True
+                    payload["cache_store"] = "database"
+                    payload["cache_stored_at"] = persisted.get("stored_at")
+                return payload
         return None
 
     ttl = cached.get("ttl", 0)
     age = time.time() - cached.get("stored_at", 0)
     if age > ttl:
         response_cache.pop(cache_key, None)
+        if ENABLE_PERSISTENT_CACHE:
+            persisted = database_manager.get_cached_response(cache_key)
+            if persisted.get("success") and persisted.get("payload") is not None:
+                payload = copy.deepcopy(persisted["payload"])
+                if isinstance(payload, dict):
+                    payload["cached"] = True
+                    payload["cache_store"] = "database"
+                    payload["cache_stored_at"] = persisted.get("stored_at")
+                return payload
         return None
 
     payload = copy.deepcopy(cached.get("payload"))
     if isinstance(payload, dict):
         payload["cached"] = True
+        payload["cache_store"] = "memory"
         payload["cache_age_seconds"] = round(age, 1)
     return payload
 
 
 def set_cached_response(cache_key: str, payload: Dict, ttl_key: str):
+    ttl = CACHE_TTLS.get(ttl_key, 60)
     response_cache[cache_key] = {
         "payload": copy.deepcopy(payload),
         "stored_at": time.time(),
-        "ttl": CACHE_TTLS.get(ttl_key, 60),
+        "ttl": ttl,
     }
+    if ENABLE_PERSISTENT_CACHE:
+        try:
+            namespace = cache_key.split("::", 1)[0]
+            database_manager.set_cached_response(cache_key, namespace, payload, ttl)
+        except Exception as exc:
+            print(f"[API] Persistent cache write failed for {cache_key}: {exc}")
+
+
+def get_stale_cached_response(cache_key: str):
+    cached = response_cache.get(cache_key)
+    if cached:
+        payload = copy.deepcopy(cached.get("payload"))
+        if isinstance(payload, dict):
+            age = time.time() - cached.get("stored_at", 0)
+            payload["cached"] = True
+            payload["stale"] = True
+            payload["cache_store"] = "memory"
+            payload["cache_age_seconds"] = round(age, 1)
+        return payload
+
+    if ENABLE_PERSISTENT_CACHE:
+        persisted = database_manager.get_cached_response(cache_key, allow_stale=True)
+        if persisted.get("success") and persisted.get("payload") is not None:
+            payload = copy.deepcopy(persisted["payload"])
+            if isinstance(payload, dict):
+                payload["cached"] = True
+                payload["stale"] = True
+                payload["cache_store"] = "database"
+                payload["cache_stored_at"] = persisted.get("stored_at")
+            return payload
+    return None
 
 
 def get_dhan_stock_url(base_symbol: str) -> Optional[str]:
@@ -511,18 +566,21 @@ class EcosystemStatus(BaseModel):
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize ecosystem on startup"""
+    """Keep production startup light; expensive data/model work is lazy-loaded."""
     global ecosystem
+    if not PRELOAD_ECOSYSTEM_ON_STARTUP:
+        print("[API] Startup complete. Ecosystem will initialize lazily on first analysis request.")
+        return
+
     try:
         if ecosystem is None:
             ecosystem = TradingEcosystem(
                 symbols=['AAPL', 'TSLA', 'MSFT', 'GOOGL', 'AMZN'],
                 initial_capital=100000.0
             )
-            # Initialize (fetch data) - but don't block startup
-            print("[API] Ecosystem created, will initialize on first request")
+            print("[API] Ecosystem preloaded. Market data will still fetch lazily.")
     except Exception as e:
-        print(f"[API] Error during startup: {str(e)}")
+        print(f"[API] Error during startup preload: {str(e)}")
 
 
 @app.get("/")
@@ -532,6 +590,19 @@ async def root():
         "message": "Multi-Agent Trading Ecosystem API",
         "version": "1.0.0",
         "status": "running"
+    }
+
+
+@app.get("/api/health")
+async def health_check():
+    """Fast health check for Render/Vercel uptime checks."""
+    return {
+        "success": True,
+        "status": "ok",
+        "timestamp": datetime.now().isoformat(),
+        "database_configured": database_manager.settings.is_configured,
+        "persistent_cache": ENABLE_PERSISTENT_CACHE,
+        "ecosystem_loaded": ecosystem is not None,
     }
 
 
@@ -761,6 +832,10 @@ async def get_ohlc_data(symbol: str, period: str = "1mo", interval: str = "1d", 
             error_msg = f"No data found for {symbol}. "
             if interval in ['5m', '15m', '30m', '1h', '90m']:
                 error_msg += "Intraday data may not be available when market is closed. Try daily (1D) interval."
+            stale_payload = get_stale_cached_response(cache_key) if ALLOW_STALE_CACHE_ON_ERROR else None
+            if stale_payload is not None:
+                stale_payload["message"] = error_msg
+                return stale_payload
             raise HTTPException(status_code=404, detail=error_msg)
         
         # Validate required columns
@@ -833,6 +908,10 @@ async def get_ohlc_data(symbol: str, period: str = "1mo", interval: str = "1d", 
     except Exception as e:
         import traceback
         traceback.print_exc()
+        stale_payload = get_stale_cached_response(cache_key) if ALLOW_STALE_CACHE_ON_ERROR else None
+        if stale_payload is not None:
+            stale_payload["message"] = f"Live OHLC fetch failed, returning last cached live data: {str(e)}"
+            return stale_payload
         raise HTTPException(status_code=500, detail=str(e))
     except HTTPException:
         # Re-raise HTTP exceptions (like 404, 400) as-is
@@ -952,6 +1031,10 @@ async def get_realtime_price(symbol: str, market: str = "US"):
                 print(f"[API] Error deriving realtime price change: {str(e)}")
 
         if price is None or price <= 0:
+            stale_payload = get_stale_cached_response(cache_key) if ALLOW_STALE_CACHE_ON_ERROR else None
+            if stale_payload is not None:
+                stale_payload["message"] = f"Live price fetch failed, returning last cached live price for {symbol}."
+                return stale_payload
             # Return error but don't raise exception - let frontend handle it
             return {
                 "success": False,
@@ -978,6 +1061,13 @@ async def get_realtime_price(symbol: str, market: str = "US"):
         print(f"[API] Error getting real-time price: {str(e)}")
         import traceback
         traceback.print_exc()
+        try:
+            stale_payload = get_stale_cached_response(cache_key) if ALLOW_STALE_CACHE_ON_ERROR else None
+            if stale_payload is not None:
+                stale_payload["message"] = f"Live price fetch failed, returning last cached live price: {str(e)}"
+                return stale_payload
+        except Exception:
+            pass
         # Return error response instead of raising exception
         return {
             "success": False,
@@ -1023,26 +1113,30 @@ async def websocket_realtime_prices(websocket: WebSocket):
             interval = data.get("interval", 5)  # Update every 5 seconds
             
             while True:
-                if ecosystem is None:
-                    await websocket.send_json({"error": "Ecosystem not initialized"})
-                    await asyncio.sleep(interval)
-                    continue
-                
                 # Fetch real-time prices for subscribed symbols
                 prices = {}
+                price_meta = {}
                 for symbol in symbols:
                     try:
-                        price = await asyncio.to_thread(ecosystem.data_collector.get_realtime_price, symbol, market=market)
+                        quote = await get_realtime_price(symbol, market=market)
+                        price = quote.get("price") or quote.get("current_price") if isinstance(quote, dict) else None
                         if price:
                             prices[symbol] = price
-                    except:
-                        pass
+                            price_meta[symbol] = {
+                                "change": quote.get("change") if isinstance(quote, dict) else None,
+                                "change_percent": quote.get("change_percent") if isinstance(quote, dict) else None,
+                                "cached": quote.get("cached", False) if isinstance(quote, dict) else False,
+                                "stale": quote.get("stale", False) if isinstance(quote, dict) else False,
+                            }
+                    except Exception as exc:
+                        print(f"[WebSocket] Price update failed for {symbol}: {exc}")
                 
                 # Send prices to client
                 await websocket.send_json({
                     "type": "price_update",
                     "market": market,
                     "prices": prices,
+                    "meta": price_meta,
                     "timestamp": datetime.now().isoformat()
                 })
                 
@@ -1456,6 +1550,13 @@ async def get_company_info(symbol: str, market: str = "US"):
         print(f"[API] Error getting company info: {str(e)}")
         import traceback
         traceback.print_exc()
+        try:
+            stale_payload = get_stale_cached_response(cache_key) if ALLOW_STALE_CACHE_ON_ERROR else None
+            if stale_payload is not None:
+                stale_payload["message"] = f"Live company info fetch failed, returning last cached live data: {str(e)}"
+                return stale_payload
+        except Exception:
+            pass
         # Return minimal data instead of error
         symbol_upper = symbol.upper() if symbol else "UNKNOWN"
         return {
@@ -2134,6 +2235,13 @@ async def get_recommendation(symbol: str, market: str = "US"):
         print(f"[API] Error getting recommendation: {str(e)}")
         import traceback
         traceback.print_exc()
+        try:
+            stale_payload = get_stale_cached_response(cache_key) if ALLOW_STALE_CACHE_ON_ERROR else None
+            if stale_payload is not None:
+                stale_payload["message"] = f"Live recommendation failed, returning last cached live recommendation: {str(e)}"
+                return stale_payload
+        except Exception:
+            pass
         # Return a default recommendation instead of failing
         return {
             "success": True,

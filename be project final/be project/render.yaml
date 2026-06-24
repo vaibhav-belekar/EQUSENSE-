@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: equisense-api
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run_api.py
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_PROVIDER
+        value: supabase
+      - key: DATABASE_SSL_MODE
+        value: require
+      - key: ENABLE_PERSISTENT_CACHE
+        value: "true"
+      - key: ALLOW_STALE_CACHE_ON_ERROR
+        value: "true"
+      - key: PRELOAD_ECOSYSTEM_ON_STARTUP
+        value: "false"
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_DATABASE_URL
+        sync: false
+

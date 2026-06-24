@@ -71,11 +71,22 @@ create table if not exists public.prediction_snapshots (
   created_at timestamptz not null default timezone('utc', now())
 );
 
+create table if not exists public.api_response_cache (
+  cache_key text primary key,
+  namespace text not null,
+  payload jsonb not null,
+  ttl_seconds integer not null check (ttl_seconds > 0),
+  stored_at timestamptz not null default timezone('utc', now()),
+  expires_at timestamptz not null,
+  source text not null default 'live_fetch'
+);
+
 create index if not exists idx_watchlists_user_id on public.watchlists (user_id);
 create index if not exists idx_watchlist_items_symbol_market on public.watchlist_items (symbol, market);
 create index if not exists idx_analysis_runs_user_created_at on public.analysis_runs (user_id, created_at desc);
 create index if not exists idx_analysis_runs_symbol_market_created_at on public.analysis_runs (symbol, market, created_at desc);
 create index if not exists idx_prediction_snapshots_symbol_market_created_at on public.prediction_snapshots (symbol, market, created_at desc);
+create index if not exists idx_api_response_cache_expires_at on public.api_response_cache (expires_at);
 
 drop trigger if exists trg_profiles_updated_at on public.profiles;
 create trigger trg_profiles_updated_at
