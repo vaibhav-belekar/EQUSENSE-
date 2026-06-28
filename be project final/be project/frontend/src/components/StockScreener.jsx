@@ -40,7 +40,6 @@ import {
   getHistoricalAnalysis,
   getStocksByMarket,
   getRealtimePrice,
-  initializeEcosystem,
   getStatus,
   getCompanyInfo,
   getOHLCData,
@@ -1520,56 +1519,7 @@ const StockScreener = () => {
         return false
       }
 
-      const normalizedSymbols = (status?.symbols || []).map(sym => sym.replace(/\.(NS|BO)$/i, '').toUpperCase())
-      const requestedSymbols = symbolsToInclude.map(sym => sym.replace(/\.(NS|BO)$/i, '').toUpperCase())
-      const hasAllSymbols = requestedSymbols.every(sym => normalizedSymbols.includes(sym))
-
-      // If already initialized with the symbols we need, return true
-      if (status && status.initialized && hasAllSymbols) {
-        console.log('[StockScreener] Ecosystem already initialized')
-        return true
-      }
-
-      // Include the symbol being analyzed in initialization
-      const initSymbols = market === 'IN'
-        ? ['RELIANCE', 'TCS', 'INFY', 'HDFCBANK', 'ICICIBANK', 'SBIN', 'WIPRO', 'HCLTECH', 'ITC', 'LT', 'BHARTIARTL', 'JSWSTEEL']
-        : ['AAPL', 'TSLA', 'MSFT', 'GOOGL', 'AMZN']
-      symbolsToInclude.forEach(sym => {
-        // Remove .NS or .BO suffix if present for initialization
-        const baseSymbol = sym.replace(/\.(NS|BO)$/i, '').toUpperCase()
-        if (!initSymbols.includes(baseSymbol)) {
-          initSymbols.push(baseSymbol)
-        }
-      })
-      
-      console.log('[StockScreener] Initializing ecosystem with symbols:', initSymbols)
-      toast.loading('Initializing ecosystem... This may take 30-60 seconds', { duration: 60000 })
-      
-      try {
-        const initResult = await initializeEcosystem(initSymbols, 100000)
-        toast.dismiss()
-        
-        if (initResult && initResult.success) {
-          toast.success('Ecosystem initialized successfully')
-          return true
-        } else {
-          toast.error('Initialization returned no success. Please try again.')
-          return false
-        }
-      } catch (initError) {
-        toast.dismiss()
-        console.error('Failed to initialize ecosystem:', initError)
-        const errorMsg = initError.response?.data?.detail || initError.message || 'Unknown error'
-        
-        if (errorMsg.includes('Network Error') || errorMsg.includes('ECONNREFUSED') || errorMsg.includes('Failed to fetch')) {
-          toast.error(`Cannot connect to backend server at ${BACKEND_DISPLAY_URL}`)
-        } else if (errorMsg.includes('timeout')) {
-          toast.error('Initialization timed out. The backend may be slow. Please try again.')
-        } else {
-          toast.error(`Failed to initialize: ${errorMsg}. Please check backend logs.`)
-        }
-        return false
-      }
+      return Boolean(status?.connected ?? true)
     } catch (error) {
       toast.dismiss()
       console.error('Unexpected error in ensureEcosystemInitialized:', error)
@@ -1601,9 +1551,6 @@ const StockScreener = () => {
       }
 
       const latestPortfolio = await refreshPortfolio()
-
-      // Wait a moment for initialization to complete
-      await new Promise(resolve => setTimeout(resolve, 1000))
 
       const result = await analyzeStockInvestment(
         symbol,

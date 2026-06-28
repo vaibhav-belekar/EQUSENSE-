@@ -1757,8 +1757,6 @@ async def get_stock_detail(symbol: str, market: str = "US"):
 async def analyze_investment(request: InvestmentAnalysisRequest):
     """Analyze investment and predict outcome with all agent reports"""
     global ecosystem
-    if ecosystem is None:
-        raise HTTPException(status_code=400, detail="Ecosystem not initialized")
     
     try:
         symbol = request.symbol.upper()
