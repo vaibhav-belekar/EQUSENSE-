@@ -8,17 +8,16 @@ export default defineConfig({
     host: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true
       },
       '/ws': {
-        target: 'ws://localhost:8000',
+        target: 'ws://127.0.0.1:8000',
         ws: true
       }
     },
     headers: {
-      'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline' 'unsafe-hashes' blob: data:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' http://localhost:8000 ws://localhost:8000 ws://localhost:5173 http://localhost:5173; font-src 'self' data:; worker-src 'self' blob: data:; object-src 'none'; base-uri 'self';"
+      'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline' 'unsafe-hashes' blob: data:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' http://127.0.0.1:8000 ws://127.0.0.1:8000 http://localhost:8000 ws://localhost:8000 ws://127.0.0.1:5173 http://127.0.0.1:5173 ws://127.0.0.1:8090 http://127.0.0.1:8090 http://localhost:5173 ws://localhost:5173; font-src 'self' data:; worker-src 'self' blob: data:; object-src 'none'; base-uri 'self';"
     }
   }
 })
-

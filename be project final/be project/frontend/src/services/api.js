@@ -1,15 +1,17 @@
 import axios from 'axios'
 import { getCompanyMeta, getRemoteLogoUrl } from '../utils/logoMapper'
 
-const DEFAULT_LOCAL_API_URL = 'http://localhost:8000'
+const DEFAULT_LOCAL_API_URL = 'http://127.0.0.1:8000'
 const IS_PRODUCTION = import.meta.env.PROD
 const API_BASE_URL = import.meta.env.VITE_API_URL || (IS_PRODUCTION ? '' : DEFAULT_LOCAL_API_URL)
 const BACKEND_DISPLAY_URL = API_BASE_URL
-const DEFAULT_TIMEOUT = IS_PRODUCTION ? 6000 : 30000
-const FAST_TIMEOUT = IS_PRODUCTION ? 2500 : 10000
-const DATA_TIMEOUT = IS_PRODUCTION ? 5000 : 15000
+const DEFAULT_TIMEOUT = IS_PRODUCTION ? 45000 : 30000
+const FAST_TIMEOUT = IS_PRODUCTION ? 10000 : 10000
+const DATA_TIMEOUT = IS_PRODUCTION ? 25000 : 15000
+const ANALYSIS_TIMEOUT = IS_PRODUCTION ? 70000 : 120000
 const quoteCache = new Map()
-const QUOTE_CACHE_TTL_MS = IS_PRODUCTION ? 60000 : 15000
+const inFlightQuoteRequests = new Map()
+const QUOTE_CACHE_TTL_MS = IS_PRODUCTION ? 30000 : 15000
 const getRealtimeWebSocketUrl = () => {
   try {
     if (!API_BASE_URL && typeof window !== 'undefined') {
@@ -20,7 +22,7 @@ const getRealtimeWebSocketUrl = () => {
     const protocol = normalized.protocol === 'https:' ? 'wss:' : 'ws:'
     return `${protocol}//${normalized.host}/ws/realtime-prices`
   } catch {
-    return 'ws://localhost:8000/ws/realtime-prices'
+    return 'ws://127.0.0.1:8000/ws/realtime-prices'
   }
 }
 
@@ -63,7 +65,7 @@ export const initializeEcosystem = async (symbols = ['AAPL', 'TSLA', 'MSFT', 'GO
     const response = await api.post('/api/initialize', {
       symbols,
       initial_capital: initialCapital,
-    }, { timeout: IS_PRODUCTION ? 8000 : 120000 })
+    }, { timeout: IS_PRODUCTION ? 45000 : 120000 })
     console.log('[API] Ecosystem initialization response:', response.data)
     return response.data
   } catch (error) {
@@ -77,15 +79,23 @@ export const initializeEcosystem = async (symbols = ['AAPL', 'TSLA', 'MSFT', 'GO
 
 // Get status with better error handling
 export const getStatus = async () => {
-  const maxAttempts = IS_PRODUCTION ? 1 : 2
+  const maxAttempts = IS_PRODUCTION ? 2 : 2
   let lastError
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
       console.log(`[API] Checking backend status... (attempt ${attempt}/${maxAttempts})`)
-      const response = await api.get('/api/status', { timeout: FAST_TIMEOUT })
-      console.log('[API] Status response:', response.data)
-      return response.data
+      const response = await api.get('/api/health', { timeout: FAST_TIMEOUT })
+      const payload = response.data || {}
+      const normalizedStatus = {
+        connected: payload.success !== false,
+        initialized: Boolean(payload.ecosystem_loaded),
+        symbols: [],
+        initial_capital: null,
+        cycle_count: null,
+      }
+      console.log('[API] Health response:', payload)
+      return normalizedStatus
     } catch (error) {
       lastError = error
       console.error('[API] Error checking status:', error)
@@ -236,14 +246,15 @@ export const analyzeStockInvestment = async (symbol, investmentAmount, investmen
     market,
     investment_amount: investmentAmount,
     investment_period: investmentPeriod,
-  })
+  }, { timeout: ANALYSIS_TIMEOUT })
   return response.data
 }
 
 // Get historical analysis
 export const getHistoricalAnalysis = async (symbol, market = 'US') => {
   const response = await api.get(`/api/historical-analysis/${symbol}`, {
-    params: { market }
+    params: { market },
+    timeout: ANALYSIS_TIMEOUT
   })
   return response.data
 }
@@ -251,7 +262,8 @@ export const getHistoricalAnalysis = async (symbol, market = 'US') => {
 // Get OHLC data for candlestick charts
 export const getOHLCData = async (symbol, period = '1mo', interval = '1d', market = 'US') => {
   const response = await api.get(`/api/ohlc/${symbol}`, {
-    params: { period, interval, market }
+    params: { period, interval, market },
+    timeout: DATA_TIMEOUT
   })
   return response.data
 }
@@ -263,14 +275,23 @@ export const getRealtimePrice = async (symbol, market = 'US') => {
   if (cached && Date.now() - cached.timestamp < QUOTE_CACHE_TTL_MS) {
     return cached.payload
   }
+  if (inFlightQuoteRequests.has(cacheKey)) {
+    return inFlightQuoteRequests.get(cacheKey)
+  }
 
-  try {
+  const request = (async () => {
     const response = await api.get(`/api/realtime-price/${symbol}`, {
       params: { market },
       timeout: FAST_TIMEOUT
     })
     quoteCache.set(cacheKey, { timestamp: Date.now(), payload: response.data })
     return response.data
+  })()
+
+  inFlightQuoteRequests.set(cacheKey, request)
+
+  try {
+    return await request
   } catch (error) {
     console.warn('[API] Error fetching real-time price:', error)
     // Return empty result instead of throwing
@@ -280,6 +301,8 @@ export const getRealtimePrice = async (symbol, market = 'US') => {
       price: null,
       current_price: null
     }
+  } finally {
+    inFlightQuoteRequests.delete(cacheKey)
   }
 }
 

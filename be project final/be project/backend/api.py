@@ -89,12 +89,12 @@ database_manager = DatabaseManager()
 response_cache: Dict[str, Dict] = {}
 
 CACHE_TTLS = {
-    "realtime_price": 15,
-    "dhan_quote": 15,
-    "ohlc": 180,
-    "recommendation": 90,
+    "realtime_price": 30,
+    "dhan_quote": 30,
+    "ohlc": 600,
+    "recommendation": 300,
     "company_info": 1800,
-    "search_summary": 45,
+    "search_summary": 120,
 }
 
 ENABLE_PERSISTENT_CACHE = os.getenv("ENABLE_PERSISTENT_CACHE", "true").strip().lower() not in ("0", "false", "no")
@@ -952,8 +952,9 @@ async def get_realtime_price(symbol: str, market: str = "US"):
             except Exception as e:
                 print(f"[API] Error getting price from ecosystem: {str(e)}")
         
-        # If no price from ecosystem, try direct yfinance fetch
-        if price is None:
+        # If no price from ecosystem, try direct yfinance fetch. Indian quotes
+        # usually resolve faster through the OHLC fallback below on Render.
+        if price is None and market != "IN":
             try:
                 import yfinance as yf
                 ticker = yf.Ticker(fetch_symbol)

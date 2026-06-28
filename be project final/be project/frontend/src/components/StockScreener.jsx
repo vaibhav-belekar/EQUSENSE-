@@ -405,6 +405,24 @@ const SCREENER_LIVE_UNIVERSE = (() => {
   return Array.from(rowsBySymbol.values())
 })()
 
+const fetchQuoteBatches = async (stocks, market, batchSize = 6, batchDelayMs = 180) => {
+  const results = []
+  for (let index = 0; index < stocks.length; index += batchSize) {
+    const batch = stocks.slice(index, index + batchSize)
+    const batchResults = await Promise.allSettled(
+      batch.map(async (stock) => {
+        const payload = await getRealtimePrice(stock.symbol, market)
+        return [stock.symbol, payload]
+      })
+    )
+    results.push(...batchResults)
+    if (index + batchSize < stocks.length) {
+      await new Promise(resolve => setTimeout(resolve, batchDelayMs))
+    }
+  }
+  return results
+}
+
 const getCompanyWebsiteUrl = (symbol) => {
   const website = getCompanyMeta(symbol)?.website
   if (!website) return null
@@ -855,12 +873,7 @@ const StockScreener = () => {
         setMarketMoversLoading(true)
       }
 
-      const results = await Promise.allSettled(
-        SCREENER_LIVE_UNIVERSE.map(async (stock) => {
-          const payload = await getRealtimePrice(stock.symbol, 'IN')
-          return [stock.symbol, payload]
-        })
-      )
+      const results = await fetchQuoteBatches(SCREENER_LIVE_UNIVERSE, 'IN')
 
       if (!isMounted) return
 
