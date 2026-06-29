@@ -83,14 +83,19 @@ class DataCollector:
 
             for fetch_symbol in candidates:
                 try:
-                    ticker = yf.Ticker(fetch_symbol)
-                    df = ticker.history(period=period, interval=interval)
-
+                    df = pd.DataFrame()
+                    if market == "IN":
+                        df = self._fetch_chart_data(fetch_symbol, period=period, interval=interval)
                     if df.empty:
+                        ticker = yf.Ticker(fetch_symbol)
+                        df = ticker.history(period=period, interval=interval)
+
+                    if df.empty and market != "IN":
                         print(f"[DataCollector] Warning: No yfinance data fetched for {fetch_symbol}, trying Yahoo chart API")
                         df = self._fetch_chart_data(fetch_symbol, period=period, interval=interval)
-                        if df.empty:
-                            continue
+
+                    if df.empty:
+                        continue
 
                     print(f"[DataCollector] Successfully fetched {len(df)} rows for {fetch_symbol}")
 
@@ -132,6 +137,13 @@ class DataCollector:
 
             for fetch_symbol in candidates:
                 try:
+                    if market == "IN":
+                        chart_df = self._fetch_chart_data(fetch_symbol, period="5d", interval="1d")
+                        if not chart_df.empty:
+                            price = float(chart_df['Close'].iloc[-1])
+                            print(f"[DataCollector] Got price from Yahoo chart API for {fetch_symbol}: {price}")
+                            return price
+
                     ticker = yf.Ticker(fetch_symbol)
                     fast_info = getattr(ticker, 'fast_info', None)
                     if fast_info:

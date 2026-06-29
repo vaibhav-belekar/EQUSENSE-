@@ -153,7 +153,7 @@ def _parse_google_rss(symbol: str) -> List[Dict]:
     query = f"\"{symbol}\" stock OR {symbol} shares OR {symbol} earnings"
     rss_url = f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-IN&gl=IN&ceid=IN:en"
     try:
-        response = _SESSION.get(rss_url, timeout=8)
+        response = _SESSION.get(rss_url, timeout=4)
         response.raise_for_status()
         xml_bytes = response.content
     except Exception:
@@ -186,7 +186,7 @@ def _parse_yahoo_rss(fetch_symbol: str) -> List[Dict]:
     rss_url = f"https://finance.yahoo.com/rss/headline?s={quote_plus(fetch_symbol)}"
 
     try:
-        response = _SESSION.get(rss_url, timeout=8)
+        response = _SESSION.get(rss_url, timeout=4)
         response.raise_for_status()
         xml_bytes = response.content
     except Exception:
@@ -261,14 +261,14 @@ def get_stock_news_sentiment(
             "message": "Live news is being prepared. Showing neutral sentiment for a faster first response.",
         }
 
-    articles = _parse_yfinance_news(resolved_symbol)
-    source = "yfinance"
-    if not articles:
-        articles = _parse_google_rss(normalized_symbol)
-        source = "google_rss"
+    articles = _parse_google_rss(normalized_symbol)
+    source = "google_rss"
     if not articles:
         articles = _parse_yahoo_rss(resolved_symbol)
         source = "yahoo_rss"
+    if not articles:
+        articles = _parse_yfinance_news(resolved_symbol)
+        source = "yfinance"
 
     relevant_articles = [
         article for article in articles

@@ -49,14 +49,14 @@ const StockAnalysisReport = ({ symbol, analysis, investmentAmount, investmentPer
   const score = Number(report.score ?? prediction.score ?? agentReports.analyst?.score ?? (expectedReturn / Math.max(modeledRisk, 0.5)))
   const currentPrice = Number(report.current_price ?? 0)
   const predictedPrice = Number(report.predicted_price ?? currentPrice)
-  const safeInvestmentAmount = Number(investmentAmount ?? 0)
-  const safeInvestmentPeriod = Math.max(1, Number(investmentPeriod ?? 1))
+  const safeInvestmentAmount = Number(report.investment_amount ?? investmentAmount ?? 0)
+  const safeInvestmentPeriod = Math.max(1, Number(report.investment_period ?? investmentPeriod ?? 1))
   const hasValidPrice = Number.isFinite(currentPrice) && currentPrice > 0
 
-  const shares = hasValidPrice ? safeInvestmentAmount / currentPrice : 0
-  const predictedValue = shares * predictedPrice
-  const profitLoss = predictedValue - safeInvestmentAmount
-  const profitLossPercent = safeInvestmentAmount > 0 ? (profitLoss / safeInvestmentAmount) * 100 : 0
+  const shares = Number(report.shares ?? (hasValidPrice ? safeInvestmentAmount / currentPrice : 0))
+  const predictedValue = Number(report.predicted_value ?? (shares * predictedPrice))
+  const profitLoss = Number(report.profit_loss ?? (predictedValue - safeInvestmentAmount))
+  const profitLossPercent = Number(report.profit_loss_percent ?? (safeInvestmentAmount > 0 ? (profitLoss / safeInvestmentAmount) * 100 : 0))
   const priceChange = predictedPrice - currentPrice
   const priceChangePercent = hasValidPrice ? (priceChange / currentPrice) * 100 : 0
 

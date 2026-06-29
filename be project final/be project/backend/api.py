@@ -24,6 +24,7 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from main import TradingEcosystem
+from data.collector import DataCollector
 from backend.config import (
     CONFIDENCE_BUY_THRESHOLD,
     CONFIDENCE_SELL_THRESHOLD,
@@ -86,6 +87,7 @@ app.add_middleware(
 # Global ecosystem instance
 ecosystem: Optional[TradingEcosystem] = None
 database_manager = DatabaseManager()
+market_data_collector = DataCollector([])
 response_cache: Dict[str, Dict] = {}
 
 CACHE_TTLS = {
@@ -990,12 +992,13 @@ async def get_realtime_price(symbol: str, market: str = "US"):
         change = None
         change_percent = None
         
-        if (price is None or price <= 0) and ecosystem is not None:
+        if price is None or price <= 0:
             try:
+                collector = ecosystem.data_collector if ecosystem is not None else market_data_collector
                 print(f"[API] Falling back to OHLC data for realtime price of {fetch_symbol}")
-                df = await asyncio.to_thread(ecosystem.data_collector.get_ohlc_data, fetch_symbol, period="1mo", interval="1d", market=market)
+                df = await asyncio.to_thread(collector.get_ohlc_data, fetch_symbol, period="1mo", interval="1d", market=market)
                 if df.empty and fetch_symbol != base_symbol:
-                    df = await asyncio.to_thread(ecosystem.data_collector.get_ohlc_data, base_symbol, period="1mo", interval="1d", market=market)
+                    df = await asyncio.to_thread(collector.get_ohlc_data, base_symbol, period="1mo", interval="1d", market=market)
                 if not df.empty and 'Close' in df.columns:
                     valid_df = df.dropna(subset=['Close'])
                     if not valid_df.empty:
@@ -1011,10 +1014,11 @@ async def get_realtime_price(symbol: str, market: str = "US"):
         if price is not None and price > 0 and (change is None or change_percent is None):
             try:
                 df = None
-                if ecosystem is not None:
-                    df = await asyncio.to_thread(ecosystem.data_collector.get_ohlc_data, fetch_symbol, period="5d", interval="1d", market=market)
+                collector = ecosystem.data_collector if ecosystem is not None else market_data_collector
+                if collector is not None:
+                    df = await asyncio.to_thread(collector.get_ohlc_data, fetch_symbol, period="5d", interval="1d", market=market)
                     if df.empty and fetch_symbol != base_symbol:
-                        df = await asyncio.to_thread(ecosystem.data_collector.get_ohlc_data, base_symbol, period="5d", interval="1d", market=market)
+                        df = await asyncio.to_thread(collector.get_ohlc_data, base_symbol, period="5d", interval="1d", market=market)
 
                 if df is None or df.empty:
                     import yfinance as yf
@@ -1797,7 +1801,13 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
         if current_price == 0:
             try:
                 print(f"[API] Trying to fetch data for {fetch_symbol} (market: {market})")
-                df = ecosystem.data_collector.fetch_data(fetch_symbol, period="5d", interval="1d", market=market)
+                df = await asyncio.to_thread(
+                    ecosystem.data_collector.fetch_data,
+                    fetch_symbol,
+                    period="5d",
+                    interval="1d",
+                    market=market,
+                )
                 if not df.empty and len(df) > 0:
                     current_price = float(df['Close'].iloc[-1])
                     print(f"[API] Got price from data fetch: {current_price}")
@@ -1805,7 +1815,13 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
                     print(f"[API] No data returned for {fetch_symbol}, trying alternative...")
                     # Try with just base symbol
                     if fetch_symbol != base_symbol:
-                        df = ecosystem.data_collector.fetch_data(base_symbol, period="5d", interval="1d", market=market)
+                        df = await asyncio.to_thread(
+                            ecosystem.data_collector.fetch_data,
+                            base_symbol,
+                            period="5d",
+                            interval="1d",
+                            market=market,
+                        )
                         if not df.empty and len(df) > 0:
                             current_price = float(df['Close'].iloc[-1])
                             print(f"[API] Got price from data fetch (base symbol): {current_price}")
@@ -1817,7 +1833,13 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
                 try:
                     if fetch_symbol != base_symbol:
                         print(f"[API] Retrying with base symbol {base_symbol}")
-                        df = ecosystem.data_collector.fetch_data(base_symbol, period="5d", interval="1d", market=market)
+                        df = await asyncio.to_thread(
+                            ecosystem.data_collector.fetch_data,
+                            base_symbol,
+                            period="5d",
+                            interval="1d",
+                            market=market,
+                        )
                         if not df.empty and len(df) > 0:
                             current_price = float(df['Close'].iloc[-1])
                             print(f"[API] Got price on retry: {current_price}")
@@ -1830,14 +1852,14 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
         # Get prediction from Analyst Agent
         # Use fetch_symbol for analysis (with .NS suffix for Indian stocks)
         try:
-            prediction = ecosystem.analyst.analyze(fetch_symbol, market=market)
+            prediction = await asyncio.to_thread(ecosystem.analyst.analyze, fetch_symbol, market=market)
         except Exception as e:
             print(f"[API] Error in analyst.analyze for {fetch_symbol}: {str(e)}")
             import traceback
             traceback.print_exc()
             # Fallback: try with base symbol
             try:
-                prediction = ecosystem.analyst.analyze(base_symbol, market=market)
+                prediction = await asyncio.to_thread(ecosystem.analyst.analyze, base_symbol, market=market)
             except Exception as e2:
                 print(f"[API] Error in analyst.analyze for {base_symbol}: {str(e2)}")
                 # Return a default prediction if analysis fails
@@ -1866,7 +1888,13 @@ async def analyze_investment(request: InvestmentAnalysisRequest):
         try:
             df = ecosystem.data_collector.get_latest_data(fetch_symbol)
             if df is None or df.empty:
-                df = ecosystem.data_collector.fetch_data(fetch_symbol, period="1y", interval="1d", market=market)
+                df = await asyncio.to_thread(
+                    ecosystem.data_collector.fetch_data,
+                    fetch_symbol,
+                    period="1y",
+                    interval="1d",
+                    market=market,
+                )
         except Exception as e:
             print(f"[API] Error getting data for calibration/risk analysis: {str(e)}")
             df = None
@@ -2103,14 +2131,14 @@ async def get_recommendation(symbol: str, market: str = "US"):
         
         if ecosystem is not None:
             try:
-                prediction = ecosystem.analyst.analyze(fetch_symbol, market=market)
+                prediction = await asyncio.to_thread(ecosystem.analyst.analyze, fetch_symbol, market=market)
                 signal = prediction.get('signal', 'Neutral')
                 confidence = float(prediction.get('confidence', DEFAULT_CONFIDENCE))
             except Exception as e:
                 print(f"[API] Error in analyst.analyze for {fetch_symbol}: {str(e)}")
                 # Fallback: try with base symbol
                 try:
-                    prediction = ecosystem.analyst.analyze(base_symbol, market=market)
+                    prediction = await asyncio.to_thread(ecosystem.analyst.analyze, base_symbol, market=market)
                     signal = prediction.get('signal', 'Neutral')
                     confidence = float(prediction.get('confidence', DEFAULT_CONFIDENCE))
                 except Exception as e2:
@@ -2143,7 +2171,7 @@ async def get_recommendation(symbol: str, market: str = "US"):
                 signal = "Neutral"
                 confidence = DEFAULT_CONFIDENCE
         
-        sentiment_payload = get_stock_news_sentiment(base_symbol, fetch_symbol=fetch_symbol)
+        sentiment_payload = get_stock_news_sentiment(base_symbol, fetch_symbol=fetch_symbol, cache_only=True)
 
         # Get risk analysis (volatility) - Use unified recommendation engine
         df = None
@@ -2151,7 +2179,13 @@ async def get_recommendation(symbol: str, market: str = "US"):
             try:
                 df = ecosystem.data_collector.get_latest_data(fetch_symbol)
                 if df is None or df.empty:
-                    df = ecosystem.data_collector.fetch_data(fetch_symbol, period="1y", interval="1d", market=market)
+                    df = await asyncio.to_thread(
+                        ecosystem.data_collector.fetch_data,
+                        fetch_symbol,
+                        period="1y",
+                        interval="1d",
+                        market=market,
+                    )
             except Exception as e:
                 print(f"[API] Error getting data for volatility calculation: {str(e)}")
                 df = None
@@ -2272,7 +2306,12 @@ async def get_news_sentiment(symbol: str, market: str = "US", refresh: bool = Fa
     try:
         symbol = symbol.upper()
         base_symbol, market, fetch_symbol = normalize_symbol(symbol, market_hint=market)
-        payload = get_stock_news_sentiment(base_symbol, fetch_symbol=fetch_symbol, force_refresh=refresh)
+        payload = await asyncio.to_thread(
+            get_stock_news_sentiment,
+            base_symbol,
+            fetch_symbol=fetch_symbol,
+            force_refresh=refresh,
+        )
         payload["market"] = market
         return payload
     except Exception as e:

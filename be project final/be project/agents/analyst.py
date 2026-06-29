@@ -139,7 +139,7 @@ class AnalystAgent:
 
     def _indicator_only_prediction(self, df: pd.DataFrame) -> Dict[str, any]:
         estimate = self._estimate_return_from_indicators(df)
-        return self._compose_prediction(df, estimate, 0.0)
+        return self._compose_prediction(df, estimate, 0.0, 6.0)
 
     def _estimate_return_from_indicators(self, df: pd.DataFrame) -> float:
         row = df.iloc[-1]

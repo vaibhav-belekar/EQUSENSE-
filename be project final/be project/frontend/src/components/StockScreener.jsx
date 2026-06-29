@@ -44,6 +44,7 @@ import {
   getCompanyInfo,
   getOHLCData,
   getRecommendation,
+  getNewsSentiment,
   getPortfolio,
   addWatchlistItem,
   BACKEND_DISPLAY_URL,
@@ -779,8 +780,9 @@ const StockScreener = () => {
   const [showSuggestions, setShowSuggestions] = useState(false)
   const [searchResults, setSearchResults] = useState([])
   const [selectedStock, setSelectedStock] = useState(null)
-  const [investmentAmount, setInvestmentAmount] = useState('10000')
-  const [investmentPeriod, setInvestmentPeriod] = useState('30') // days
+  const [investmentAmount, setInvestmentAmount] = useState('')
+  const [investmentPeriod, setInvestmentPeriod] = useState('')
+  const [analysisInput, setAnalysisInput] = useState(null)
   const [analysisResult, setAnalysisResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [searching, setSearching] = useState(false)
@@ -798,6 +800,7 @@ const StockScreener = () => {
   const [companyInfo, setCompanyInfo] = useState(null)
   const [predictionMetrics, setPredictionMetrics] = useState(null)
   const [recommendation, setRecommendation] = useState(null)
+  const [newsSentiment, setNewsSentiment] = useState(null)
   const [portfolio, setPortfolio] = useState(null)
   const [showComparisonModal, setShowComparisonModal] = useState(false)
   const [comparisonStocks, setComparisonStocks] = useState([])
@@ -814,15 +817,28 @@ const StockScreener = () => {
   const [marketMoversLoading, setMarketMoversLoading] = useState(!IS_PRODUCTION)
   const [marketMoversUpdatedAt, setMarketMoversUpdatedAt] = useState('')
   const activeSearchRequestRef = useRef(0)
+  const backendFailureCountRef = useRef(0)
+
+  const selectedAmountValue = Number(investmentAmount)
+  const selectedPeriodValue = Number(investmentPeriod)
+  const hasValidAnalysisInput = Number.isFinite(selectedAmountValue) && selectedAmountValue > 0 &&
+    Number.isFinite(selectedPeriodValue) && selectedPeriodValue > 0
+  const normalizedAnalysisPeriod = hasValidAnalysisInput ? Math.max(1, Math.round(selectedPeriodValue)) : null
 
   // Check backend status on mount and periodically
   useEffect(() => {
     const checkBackend = async () => {
       try {
         const status = await getStatus()
+        backendFailureCountRef.current = 0
         setBackendStatus({ connected: true, initialized: status.initialized || false, checking: false })
       } catch (error) {
-        setBackendStatus({ connected: false, initialized: false, checking: false })
+        backendFailureCountRef.current += 1
+        setBackendStatus((prev) => ({
+          connected: prev.connected && backendFailureCountRef.current < 3,
+          initialized: backendFailureCountRef.current < 3 ? prev.initialized : false,
+          checking: false
+        }))
       }
     }
 
@@ -872,7 +888,7 @@ const StockScreener = () => {
         setMarketMoversLoading(true)
       }
 
-      const results = await fetchQuoteBatches(SCREENER_LIVE_UNIVERSE, 'IN')
+      const results = await fetchQuoteBatches(HOME_MARKET_SYMBOLS, 'IN')
 
       if (!isMounted) return
 
@@ -1272,6 +1288,7 @@ const StockScreener = () => {
     setPriceHistory([])
     setDailyTrendHistory([])
     setRecommendation(null)
+    setNewsSentiment(null)
     setPredictionMetrics(null)
 
     if (!symbol.trim()) {
@@ -1314,6 +1331,16 @@ const StockScreener = () => {
       })
       .catch((error) => {
         console.log('[StockScreener] Company info fetch failed:', error)
+      })
+
+    getNewsSentiment(symbol, market, true)
+      .then((payload) => {
+        if (activeSearchRequestRef.current === requestId) {
+          setNewsSentiment(payload)
+        }
+      })
+      .catch((error) => {
+        console.log('[StockScreener] News sentiment fetch failed:', error)
       })
 
     refreshPortfolio()
@@ -1534,13 +1561,19 @@ const StockScreener = () => {
   }
 
   const handleAnalyze = async (symbol) => {
-    if (!investmentAmount || !investmentPeriod) {
+    if (!hasValidAnalysisInput) {
       toast.error('Please enter investment amount and period')
       return
     }
 
+    const amountValue = selectedAmountValue
+    const periodValue = normalizedAnalysisPeriod
     setLoading(true)
     setSelectedStockForAnalysis(symbol)
+    setAnalysisInput({
+      investmentAmount: amountValue,
+      investmentPeriod: periodValue
+    })
     
     try {
       // Ensure ecosystem is initialized with this symbol
@@ -1554,8 +1587,8 @@ const StockScreener = () => {
 
       const result = await analyzeStockInvestment(
         symbol,
-        parseFloat(investmentAmount),
-        parseInt(investmentPeriod),
+        amountValue,
+        periodValue,
         market
       )
       
@@ -1616,13 +1649,13 @@ const StockScreener = () => {
         
         toast.success('Analysis completed!')
       } else {
-        const fallbackResult = buildLocalAnalysisResult(symbol)
-        if (fallbackResult) {
-          setAnalysisResult(fallbackResult)
-          toast.success('Analysis completed with cached market data.')
-        } else {
-          toast.error('Analysis failed: ' + (result.message || 'Unknown error'))
-        }
+          const fallbackResult = buildLocalAnalysisResult(symbol)
+          if (fallbackResult) {
+            setAnalysisResult(fallbackResult)
+            toast.success('Backend analysis was unavailable; showing local market-data analysis.')
+          } else {
+            toast.error('Analysis failed: ' + (result.message || 'Unknown error'))
+          }
       }
     } catch (error) {
       console.error('Error analyzing stock:', error)
@@ -1630,7 +1663,7 @@ const StockScreener = () => {
       const fallbackResult = buildLocalAnalysisResult(symbol)
       if (fallbackResult) {
         setAnalysisResult(fallbackResult)
-        toast.success('Analysis completed with cached market data.')
+        toast.success('Backend analysis was unavailable; showing local market-data analysis.')
       } else if (errorMessage.includes('not initialized') || errorMessage.includes('Ecosystem')) {
         toast.error('Backend not initialized. Please wait a moment and try again.')
       } else if (errorMessage.includes('500') || errorMessage.includes('Internal Server Error')) {
@@ -2816,17 +2849,96 @@ const StockScreener = () => {
                         : null}
                     />
 
-                    <StockReturnCalculator
-                      symbol={selectedStockData.symbol}
-                      currentPrice={selectedStockData.price || stockPrices[selectedStockData.symbol]}
-                      priceHistory={priceHistory}
-                    />
+                    <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                      <div className="mb-4 flex items-center justify-between gap-3">
+                        <div>
+                          <h3 className="text-lg font-bold text-gray-900">Full Analysis Setup</h3>
+                          <p className="text-sm font-medium text-gray-500">Set your amount and holding period before running the report.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => handleAnalyze(selectedStockData.symbol)}
+                          disabled={loading || !hasValidAnalysisInput}
+                          className="shrink-0 rounded-lg bg-blue-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {loading ? 'Analyzing...' : 'Run Full Analysis'}
+                        </button>
+                      </div>
+                      <div className="grid gap-4 sm:grid-cols-2">
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-black uppercase tracking-wide text-gray-500">Investment Amount</span>
+                          <div className="flex items-center rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 focus-within:border-blue-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-100">
+                            <span className="mr-2 text-sm font-bold text-gray-500">₹</span>
+                            <input
+                              type="number"
+                              min="1"
+                              step="500"
+                              value={investmentAmount}
+                              onChange={(event) => setInvestmentAmount(event.target.value)}
+                              placeholder="Enter amount"
+                              className="w-full bg-transparent text-base font-bold text-gray-950 outline-none"
+                            />
+                          </div>
+                        </label>
+                        <label className="block">
+                          <span className="mb-1 block text-xs font-black uppercase tracking-wide text-gray-500">Investment Period</span>
+                          <div className="flex items-center rounded-lg border border-gray-300 bg-gray-50 px-3 py-2 focus-within:border-blue-500 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-100">
+                            <input
+                              type="number"
+                              min="1"
+                              max="3650"
+                              step="1"
+                              value={investmentPeriod}
+                              onChange={(event) => setInvestmentPeriod(event.target.value)}
+                              placeholder="Enter days"
+                              className="w-full bg-transparent text-base font-bold text-gray-950 outline-none"
+                            />
+                            <span className="ml-2 text-sm font-bold text-gray-500">days</span>
+                          </div>
+                        </label>
+                      </div>
+                      <div className="mt-4 flex flex-wrap gap-2">
+                        {[
+                          ['₹10k', '10000', null],
+                          ['₹50k', '50000', null],
+                          ['100k', '100000', null],
+                          ['30D', null, '30'],
+                          ['90D', null, '90'],
+                          ['1Y', null, '365'],
+                        ].map(([label, amount, period]) => (
+                          <button
+                            key={label}
+                            type="button"
+                            onClick={() => {
+                              if (amount) setInvestmentAmount(amount)
+                              if (period) setInvestmentPeriod(period)
+                            }}
+                            className="rounded-full border border-gray-200 px-3 py-1 text-xs font-black text-gray-700 transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700"
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      {!hasValidAnalysisInput && (
+                        <p className="mt-3 text-xs font-semibold text-amber-700">
+                          Enter or select both amount and period to run backend full analysis.
+                        </p>
+                      )}
+                    </div>
 
                     <NewsSentiment
                       symbol={selectedStockData.symbol}
                       market={market}
                       onFullAnalyze={handleAnalyze}
                       onViewChart={handleViewChart}
+                      initialPayload={newsSentiment}
+                      analyzing={loading}
+                    />
+
+                    <StockReturnCalculator
+                      symbol={selectedStockData.symbol}
+                      currentPrice={selectedStockData.price || stockPrices[selectedStockData.symbol]}
+                      priceHistory={priceHistory}
                     />
                   </div>
 
@@ -2877,8 +2989,8 @@ const StockScreener = () => {
           <StockAnalysisReport
             symbol={selectedStockForAnalysis}
             analysis={analysisResult}
-            investmentAmount={parseFloat(investmentAmount)}
-            investmentPeriod={parseInt(investmentPeriod)}
+            investmentAmount={analysisInput?.investmentAmount}
+            investmentPeriod={analysisInput?.investmentPeriod}
             market={market}
             recommendation={recommendation}
             priceHistory={priceHistory}

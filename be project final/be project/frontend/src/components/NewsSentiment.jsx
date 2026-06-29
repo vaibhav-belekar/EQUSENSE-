@@ -50,7 +50,7 @@ const buildSummary = (payload) => {
   return `${symbol} has mixed recent news signals, so the overall sentiment remains neutral. The aggregate score across ${count} recent articles is ${score}.`
 }
 
-const NewsSentiment = ({ symbol, market = 'US', onFullAnalyze, onViewChart, initialPayload = null }) => {
+const NewsSentiment = ({ symbol, market = 'US', onFullAnalyze, onViewChart, initialPayload = null, analyzing = false }) => {
   const [newsPayload, setNewsPayload] = useState(initialPayload)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -70,20 +70,24 @@ const NewsSentiment = ({ symbol, market = 'US', onFullAnalyze, onViewChart, init
 
       setLoading(true)
       setError('')
-      const payload = await getNewsSentiment(symbol, market, refresh)
+      try {
+        const payload = await getNewsSentiment(symbol, market, refresh)
 
-      if (!active) return
+        if (!active) return
 
-      setNewsPayload(payload)
-      setLoading(false)
-
-      if (!payload?.success) {
-        setError('Unable to load live news sentiment right now.')
+        setNewsPayload(payload)
+        if (!payload?.success) {
+          setError('Unable to load live news sentiment right now.')
+        }
+      } finally {
+        if (active) {
+          setLoading(false)
+        }
       }
     }
 
     if (!initialPayload) {
-      fetchNews(false)
+      fetchNews(true)
     }
     const intervalId = window.setInterval(() => fetchNews(true), 10 * 60 * 1000)
 
@@ -250,13 +254,16 @@ const NewsSentiment = ({ symbol, market = 'US', onFullAnalyze, onViewChart, init
 
         <div className="flex gap-2 pt-2">
           <button
+            type="button"
             onClick={() => onFullAnalyze && onFullAnalyze(symbol)}
+            disabled={analyzing}
             className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2"
           >
-            <Newspaper className="w-4 h-4" />
-            Full Analyze
+            <Newspaper className={`w-4 h-4 ${analyzing ? 'animate-pulse' : ''}`} />
+            {analyzing ? 'Analyzing...' : 'Full Analyze'}
           </button>
           <button
+            type="button"
             onClick={() => onViewChart && onViewChart(symbol)}
             className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm font-semibold transition-colors flex items-center justify-center gap-2"
           >
