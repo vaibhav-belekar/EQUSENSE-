@@ -1,0 +1,11 @@
+.git
+.agents
+.codex
+.venv311
+**/__pycache__
+**/*.pyc
+**/.DS_Store
+be project final/be project/frontend/node_modules
+be project final/be project/frontend/dist
+be project final/be project/frontend/.vite
+be project final/node_modules
