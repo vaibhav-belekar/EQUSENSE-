@@ -6,7 +6,7 @@ const IS_PRODUCTION = import.meta.env.PROD
 const API_BASE_URL = import.meta.env.VITE_API_URL || (IS_PRODUCTION ? '' : DEFAULT_LOCAL_API_URL)
 const BACKEND_DISPLAY_URL = API_BASE_URL
 const DEFAULT_TIMEOUT = IS_PRODUCTION ? 45000 : 30000
-const FAST_TIMEOUT = IS_PRODUCTION ? 10000 : 10000
+const FAST_TIMEOUT = IS_PRODUCTION ? 20000 : 10000
 const DATA_TIMEOUT = IS_PRODUCTION ? 25000 : 15000
 const ANALYSIS_TIMEOUT = IS_PRODUCTION ? 70000 : 120000
 const quoteCache = new Map()
@@ -79,7 +79,7 @@ export const initializeEcosystem = async (symbols = ['AAPL', 'TSLA', 'MSFT', 'GO
 
 // Get status with better error handling
 export const getStatus = async () => {
-  const maxAttempts = IS_PRODUCTION ? 2 : 2
+  const maxAttempts = IS_PRODUCTION ? 4 : 2
   let lastError
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
@@ -108,7 +108,7 @@ export const getStatus = async () => {
         error.message.includes('timeout')
 
       if (attempt < maxAttempts && isNetworkError) {
-        await new Promise(resolve => setTimeout(resolve, 3000))
+        await new Promise(resolve => setTimeout(resolve, IS_PRODUCTION ? 5000 : 3000))
         continue
       }
     }
